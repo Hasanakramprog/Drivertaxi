@@ -23,7 +23,9 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
   Map<String, dynamic>? _tripData;
   Timer? _locationUpdateTimer;
   final DirectionsService _directionsService = DirectionsService();
-  
+    // Add these properties
+  int _currentStopIndex = -1; // -1 means heading to first stop or pickup
+  bool _hasCompletedAllStops = false;
   // Add this field
   late TripProvider _tripProvider;
   
@@ -62,45 +64,54 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
   }
   
   Future<void> _initializeTrip() async {
-    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+  final tripProvider = Provider.of<TripProvider>(context, listen: false);
+  
+  try {
+    // Always load fresh trip data when screen is opened
+    await tripProvider.loadTrip(widget.tripId);
     
-    try {
-      // Always load fresh trip data when screen is opened
-      await tripProvider.loadTrip(widget.tripId);
-      
-      // Subscribe to trip updates
-      tripProvider.addTripListener(() {
-        if (mounted) {
-          setState(() {
-            _tripData = tripProvider.currentTripData;
-          });
+    // Subscribe to trip updates
+    tripProvider.addTripListener(() {
+      if (mounted) {
+        final oldStatus = _tripData?['status'];
+        final newStatus = tripProvider.currentTripData?['status'];
+        
+        setState(() {
+          _tripData = tripProvider.currentTripData;
+        });
+        
+        // Initialize stop navigation when trip changes from arrived to in_progress
+        if (oldStatus == 'driver_arrived' && newStatus == 'in_progress') {
+          _initializeStopNavigation();
+        } else {
           _updateRouteAndMarkers();
         }
-      });
-      
-      // Set initial data
-      setState(() {
-        _tripData = tripProvider.currentTripData;
-        _isLoading = false;
-      });
-      
-      // Start location updates
-      _startLocationUpdates();
-      
-      // Setup initial route
+      }
+    });
+    
+    // Set initial data
+    setState(() {
+      _tripData = tripProvider.currentTripData;
+      _isLoading = false;
+    });
+    
+    // Initialize stop navigation if the trip is already in progress
+    if (_tripData?['status'] == 'in_progress') {
+      _initializeStopNavigation();
+    } else {
       _updateRouteAndMarkers();
-    } catch (e) {
-      print('Error initializing trip: $e');
-      setState(() {
-        _isLoading = false;
-      });
-      
-      // Show error message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load trip data: ${e.toString()}')),
-      );
     }
+  } catch (e) {
+    print('Error initializing trip: $e');
+    setState(() {
+      _isLoading = false;
+    });
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Failed to load trip data: ${e.toString()}')),
+    );
   }
+}
   
   void _startLocationUpdates() {
     // Update location every 5 seconds
@@ -110,119 +121,180 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
   }
   
   Future<void> _updateRouteAndMarkers() async {
-    if (_mapController == null || _tripData == null) return;
+  if (_mapController == null || _tripData == null) return;
+  
+  final locationProvider = Provider.of<LocationProvider>(context, listen: false);
+  final tripProvider = Provider.of<TripProvider>(context, listen: false);
+  final currentLocation = locationProvider.currentPosition;
+  
+  if (currentLocation == null) return;
+  
+  final tripStatus = _tripData!['status'] as String;
+  final driverLatLng = LatLng(currentLocation.latitude ?? 0.0, currentLocation.longitude ?? 0.0);
+  
+  // Clear existing markers and polylines
+  setState(() {
+    _markers = {};
+    _polylines = {};
     
-    final locationProvider = Provider.of<LocationProvider>(context, listen: false);
-    final tripProvider = Provider.of<TripProvider>(context, listen: false);
-    final currentLocation = locationProvider.currentPosition;
+    // Always add driver marker
+    _markers.add(Marker(
+      markerId: const MarkerId('driver'),
+      position: driverLatLng,
+      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+      infoWindow: const InfoWindow(title: 'Your Location')
+    ));
+  });
+  
+  // If status is driver_accepted or arrived, show route to pickup
+  if (tripStatus == 'driver_accepted' || tripStatus == 'driver_arrived') {
+    // Access nested pickup location data
+    final pickup = _tripData!['pickup'] as Map<String, dynamic>? ?? {};
+    final pickupLat = double.tryParse(pickup['latitude']?.toString() ?? '') ?? 0.0;
+    final pickupLng = double.tryParse(pickup['longitude']?.toString() ?? '') ?? 0.0;
+    final pickupLatLng = LatLng(pickupLat, pickupLng);
     
-    if (currentLocation == null) return;
-    
-    final tripStatus = _tripData!['status'] as String;
-    final driverLatLng = LatLng(currentLocation.latitude!, currentLocation.longitude!);
-    
-    // Clear existing markers and polylines
+    // Add pickup marker
     setState(() {
-      _markers = {};
-      _polylines = {};
-      
-      // Always add driver marker
       _markers.add(Marker(
-        markerId: const MarkerId('driver'),
-        position: driverLatLng,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
-        infoWindow: const InfoWindow(title: 'Your Location')
+        markerId: const MarkerId('pickup'),
+        position: pickupLatLng,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        infoWindow: InfoWindow(title: 'Pickup: ${pickup['address'] ?? 'Unknown location'}')
+      ));
+    });
+  
+    // Get directions to pickup
+    try {
+      final directions = await _directionsService.getDirections(
+        origin: driverLatLng,
+        destination: pickupLatLng
+      );
+      
+      if (directions != null) {
+        setState(() {
+          _polylines.add(Polyline(
+            polylineId: const PolylineId('route_to_pickup'),
+            color: Colors.blue,
+            width: 5,
+            points: directions.polylinePoints
+                .map((e) => LatLng(e.latitude, e.longitude))
+                .toList(),
+          ));
+        });
+      }
+    } catch (e) {
+      print('Error getting directions: $e');
+    }
+    
+    // Update bounds to include both driver and pickup
+    _updateCameraBounds([driverLatLng, pickupLatLng]);
+  }
+  // If trip is in progress, show route to current stop or dropoff
+  else if (tripStatus == 'in_progress') {
+    final dropoff = _tripData!['dropoff'] as Map<String, dynamic>? ?? {};
+    final dropoffLat = double.tryParse(dropoff['latitude']?.toString() ?? '') ?? 0.0;
+    final dropoffLng = double.tryParse(dropoff['longitude']?.toString() ?? '') ?? 0.0;
+    final dropoffLatLng = LatLng(dropoffLat, dropoffLng);
+    
+    // Check if trip has stops
+    // final hasStops = _tripData!['hasStops'] == true;
+    final stops = (_tripData!['stops'] as List<dynamic>?) ?? [];
+    
+    // List to hold all points for camera bounds
+    List<LatLng> boundPoints = [driverLatLng];
+    
+    // Add ALL stop and dropoff markers regardless of current destination
+    if ( stops.isNotEmpty) {
+      // Add markers for each stop
+      for (int i = 0; i < stops.length; i++) {
+        final stop = stops[i] as Map<String, dynamic>;
+        final stopLat = double.tryParse(stop['latitude']?.toString() ?? '') ?? 0.0;
+        final stopLng = double.tryParse(stop['longitude']?.toString() ?? '') ?? 0.0;
+        
+        if (stopLat != 0.0 && stopLng != 0.0) {
+          final stopLatLng = LatLng(stopLat, stopLng);
+          boundPoints.add(stopLatLng);
+          
+          // Add stop marker
+          setState(() {
+            _markers.add(Marker(
+              markerId: MarkerId('stop_$i'),
+              position: stopLatLng,
+              icon: BitmapDescriptor.defaultMarkerWithHue(
+                // Highlight current stop with different color
+                i == _currentStopIndex ? BitmapDescriptor.hueYellow : BitmapDescriptor.hueOrange
+              ),
+              infoWindow: InfoWindow(
+                title: i == _currentStopIndex ? 'Current Stop' : 'Stop ${i + 1}',
+                snippet: stop['address'] ?? 'Unknown location'
+              )
+            ));
+          });
+        }
+      }
+    }
+    
+    // Add dropoff marker
+    setState(() {
+      _markers.add(Marker(
+        markerId: const MarkerId('dropoff'),
+        position: dropoffLatLng,
+        icon: BitmapDescriptor.defaultMarkerWithHue(
+          // Highlight dropoff if it's the current destination
+          _hasCompletedAllStops ? BitmapDescriptor.hueYellow : BitmapDescriptor.hueRed
+        ),
+        infoWindow: InfoWindow(title: 'Dropoff: ${dropoff['address'] ?? 'Unknown destination'}')
       ));
     });
     
-    // If status is driver_accepted or arrived, show route to pickup
-    if (tripStatus == 'driver_accepted' || tripStatus == 'driver_arrived') {
-        // Access nested pickup location data
-        final pickup = _tripData!['pickup'] as Map<String, dynamic>? ?? {};
-        final pickupLat = double.tryParse(pickup['latitude']?.toString() ?? '') ?? 0.0;
-        final pickupLng = double.tryParse(pickup['longitude']?.toString() ?? '') ?? 0.0;
-        final pickupLatLng = LatLng(pickupLat, pickupLng);
-        
-        // Add pickup marker
+    boundPoints.add(dropoffLatLng);
+    
+    // Determine the current destination based on stop index
+    LatLng destinationLatLng;
+    String destinationLabel;
+    
+    if ( stops.isNotEmpty && _currentStopIndex >= 0 && _currentStopIndex < stops.length) {
+      // Heading to a stop
+      final currentStop = stops[_currentStopIndex] as Map<String, dynamic>;
+      final stopLat = double.tryParse(currentStop['latitude']?.toString() ?? '') ?? 0.0;
+      final stopLng = double.tryParse(currentStop['longitude']?.toString() ?? '') ?? 0.0;
+      destinationLatLng = LatLng(stopLat, stopLng);
+      destinationLabel = 'Stop ${_currentStopIndex + 1}: ${currentStop['address'] ?? 'Unknown location'}';
+    } else {
+      // Heading to final dropoff
+      destinationLatLng = dropoffLatLng;
+      destinationLabel = 'Dropoff: ${dropoff['address'] ?? 'Unknown destination'}';
+      _hasCompletedAllStops = true;
+    }
+    
+    // Get directions to current destination
+    try {
+      final directions = await _directionsService.getDirections(
+        origin: driverLatLng,
+        destination: destinationLatLng
+      );
+      
+      if (directions != null) {
         setState(() {
-          _markers.add(Marker(
-            markerId: const MarkerId('pickup'),
-            position: pickupLatLng,
-            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-            infoWindow: InfoWindow(title: 'Pickup: ${pickup['address'] ?? 'Unknown location'}')
+          _polylines.add(Polyline(
+            polylineId: const PolylineId('current_route'),
+            color: Colors.green, // Active route is green
+            width: 5,
+            points: directions.polylinePoints
+                .map((e) => LatLng(e.latitude, e.longitude))
+                .toList(),
           ));
         });
-      
-      // Get directions to pickup
-      try {
-        final directions = await _directionsService.getDirections(
-          origin: driverLatLng,
-          destination: pickupLatLng
-        );
-        
-        if (directions != null) {
-          setState(() {
-            _polylines.add(Polyline(
-              polylineId: const PolylineId('route_to_pickup'),
-              color: Colors.blue,
-              width: 5,
-              points: directions.polylinePoints
-                  .map((e) => LatLng(e.latitude, e.longitude))
-                  .toList(),
-            ));
-          });
-        }
-      } catch (e) {
-        print('Error getting directions: $e');
       }
-      
-      // Update bounds to include both driver and pickup
-      _updateCameraBounds([driverLatLng, pickupLatLng]);
+    } catch (e) {
+      print('Error getting directions: $e');
     }
-    // If trip is in progress, show route to dropoff
-    else if (tripStatus == 'in_progress') {
-      final dropoff = _tripData!['dropoff'] as Map<String, dynamic>? ?? {};
-      final dropoffLat = double.tryParse(dropoff['latitude']?.toString() ?? '') ?? 0.0;
-      final dropoffLng = double.tryParse(dropoff['longitude']?.toString() ?? '') ?? 0.0;
-      final dropoffLatLng = LatLng(dropoffLat, dropoffLng);
-      
-      // Add dropoff marker
-      setState(() {
-        _markers.add(Marker(
-          markerId: const MarkerId('dropoff'),
-          position: dropoffLatLng,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-          infoWindow: InfoWindow(title: 'Dropoff: ${dropoff['address'] ?? 'Unknown destination'}')
-        ));
-      });
-      
-      // Get directions to dropoff
-      try {
-        final directions = await _directionsService.getDirections(
-          origin: driverLatLng,
-          destination: dropoffLatLng
-        );
-        
-        if (directions != null) {
-          setState(() {
-            _polylines.add(Polyline(
-              polylineId: const PolylineId('route_to_dropoff'),
-              color: Colors.red,
-              width: 5,
-              points: directions.polylinePoints
-                  .map((e) => LatLng(e.latitude, e.longitude))
-                  .toList(),
-            ));
-          });
-        }
-      } catch (e) {
-        print('Error getting directions: $e');
-      }
-      
-      // Update bounds to include both driver and dropoff
-      _updateCameraBounds([driverLatLng, dropoffLatLng]);
-    }
+    
+    // Focus camera on current route section
+    _updateCameraBounds([driverLatLng, destinationLatLng]);
   }
+}
   
   void _updateCameraBounds(List<LatLng> points) {
     if (_mapController == null || points.isEmpty) return;
@@ -253,40 +325,80 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
     _updateRouteAndMarkers();
   }
   
+  // Method to move to next stop or dropoff
+  void _proceedToNextStop() {
+  if (_tripData == null) return;
+  
+  final stops = (_tripData!['stops'] as List<dynamic>?) ?? [];
+  
+  setState(() {
+    // Increment stop index
+    _currentStopIndex++;
+    
+    // Check if we've completed all stops
+    if (_currentStopIndex >= stops.length) {
+      _hasCompletedAllStops = true;
+    } else {
+      _hasCompletedAllStops = false;
+    }
+  });
+  
+  // Update the map
+  _updateRouteAndMarkers();
+}
+
+// Method to initialize stop navigation
+  void _initializeStopNavigation() {
+  if (_tripData == null) return;
+  
+  // final hasStops = _tripData!['hasStops'] == true;
+  final stops = (_tripData!['stops'] as List<dynamic>?) ?? [];
+  
+  setState(() {
+    // If there are stops, set index to first stop (0)
+    // Otherwise, skip straight to dropoff (-1 means no current stop)
+    _currentStopIndex = ( stops.isNotEmpty) ? 0 : -1;
+    _hasCompletedAllStops =  stops.isEmpty;
+  });
+  
+  _updateRouteAndMarkers();
+}
   Widget _buildTripActionButton() {
-    if (_tripData == null) return const SizedBox.shrink();
-    
-    final tripProvider = Provider.of<TripProvider>(context);
-    final status = _tripData!['status'] as String;
-    
-    switch (status) {
-      case 'driver_accepted':
-        return ElevatedButton(
-          onPressed: () async {
-            await tripProvider.markArrived();
-            _updateRouteAndMarkers();
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green,
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
-          ),
-          child: const Text('ARRIVED AT PICKUP', style: TextStyle(fontSize: 16)),
-        );
-        
-      case 'driver_arrived':
-        return ElevatedButton(
-          onPressed: () async {
-            await tripProvider.startTrip();
-            _updateRouteAndMarkers();
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.blue,
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
-          ),
-          child: const Text('START TRIP', style: TextStyle(fontSize: 16)),
-        );
-        
-      case 'in_progress':
+  if (_tripData == null) return const SizedBox.shrink();
+  
+  final tripProvider = Provider.of<TripProvider>(context);
+  final status = _tripData!['status'] as String;
+  
+  switch (status) {
+    case 'driver_accepted':
+      return ElevatedButton(
+        onPressed: () async {
+          await tripProvider.markArrived();
+          _updateRouteAndMarkers();
+        },
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.green,
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+        ),
+        child: const Text('ARRIVED AT PICKUP', style: TextStyle(fontSize: 16)),
+      );
+      
+    case 'driver_arrived':
+      return ElevatedButton(
+        onPressed: () async {
+          await tripProvider.startTrip();
+          _initializeStopNavigation(); // Initialize stop navigation when trip starts
+        },
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.blue,
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+        ),
+        child: const Text('START TRIP', style: TextStyle(fontSize: 16)),
+      );
+      
+    case 'in_progress':
+      // Check if we need to show "Complete Trip" or "Next Stop" button
+      if (_hasCompletedAllStops) {
         return ElevatedButton(
           onPressed: () async {
             final success = await tripProvider.completeTrip();
@@ -300,11 +412,27 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
           ),
           child: const Text('COMPLETE TRIP', style: TextStyle(fontSize: 16)),
         );
+      } else {
+        // Get stops to show which stop we're heading to
+        final stops = (_tripData!['stops'] as List<dynamic>?) ?? [];
+        final nextStopNum = _currentStopIndex + 1; // For display (1-based)
         
-      default:
-        return const SizedBox.shrink();
-    }
+        return ElevatedButton(
+          onPressed: () {
+            _proceedToNextStop();
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.green,
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+          ),
+          child: Text('COMPLETED STOP $nextStopNum', style: TextStyle(fontSize: 16)),
+        );
+      }
+      
+    default:
+      return const SizedBox.shrink();
   }
+}
   
   @override
   Widget build(BuildContext context) {
@@ -346,66 +474,124 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
     );
   }
   
-  Widget _buildTripStatusPanel() {
-    if (_tripData == null) return const SizedBox.shrink();
-    
-    final status = _tripData!['status'] as String;
-    final statusText = _getStatusDisplayText(status);
-    
-    return Card(
-      elevation: 4,
-      color: Colors.white.withOpacity(0.9),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.location_on, color: Colors.green),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _tripData!['pickupAddress'] ?? 'Unknown pickup location',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
+Widget _buildTripStatusPanel() {
+  if (_tripData == null) return const SizedBox.shrink();
+  
+  final status = _tripData!['status'] as String;
+  final statusText = _getStatusDisplayText(status);
+  
+  // Access nested pickup and dropoff data
+  final pickup = _tripData!['pickup'] as Map<String, dynamic>? ?? {};
+  final dropoff = _tripData!['dropoff'] as Map<String, dynamic>? ?? {};
+  
+  // Get stops info
+  final stops = (_tripData!['stops'] as List<dynamic>?) ?? [];
+  
+  return Card(
+    elevation: 4,
+    color: Colors.white.withOpacity(0.9),
+    child: Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.location_on, color: Colors.green),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  pickup['address'] ?? 'Unknown pickup location',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
+                ),
+              ),
+            ],
+          ),
+          
+          // Show stops if present
+          if (stops.isNotEmpty) ...[
+            const Divider(),
+            // Current navigation status
+            if (status == 'in_progress') ...[
+              if (_currentStopIndex >= 0 && _currentStopIndex < stops.length) ...[
+                Row(
+                  children: [
+                    const Icon(Icons.navigation, color: Colors.blue),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Navigating to Stop ${_currentStopIndex + 1}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ] else if (_hasCompletedAllStops) ...[
+                Row(
+                  children: [
+                    const Icon(Icons.navigation, color: Colors.blue),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Navigating to Dropoff',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
-            ),
-            const Divider(),
-            Row(
-              children: [
-                const Icon(Icons.location_on, color: Colors.red),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _tripData!['dropoffAddress'] ?? 'Unknown destination',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
+            ],
+          ],
+          
+          
+          // const Divider(),
+          Row(
+            children: [
+              const Icon(Icons.location_on, color: Colors.red),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  dropoff['address'] ?? 'Unknown destination',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
                 ),
-              ],
-            ),
-            const Divider(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Status: $statusText', 
+              ),
+            ],
+          ),
+          const Divider(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Flexible(
+                child: Text('Status: $statusText', 
                   style: TextStyle(
                     color: _getStatusColor(status),
                     fontWeight: FontWeight.bold
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                Text(
-                  'Fare: \$${_tripData!['fare'] ?? '0'}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-          ],
-        ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Fare: \$${(_tripData!['fare'] ?? 0).toStringAsFixed(2)}',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
   
   String _getStatusDisplayText(String status) {
     switch (status) {

@@ -266,31 +266,74 @@ void removeTripListener(Function callback) {
     print('Rejecting trip: $tripId');
   }
   
-  // Method to process FCM notifications
-  void processFcmNotification(Map<String, dynamic> messageData) {
-    // Check if it's a trip request notification
-    if (messageData['notificationType'] == 'tripRequest') {
-      // Format the data in a way your app expects
-      final processedData = {
-        'tripId': messageData['tripId'],
-        'pickup': {
-          'address': messageData['pickupAddress'],
-          'latitude': double.tryParse(messageData['pickupLatitude'] ?? '0'),
-          'longitude': double.tryParse(messageData['pickupLongitude'] ?? '0'),
-        },
-        'dropoff': {
-          'address': messageData['dropoffAddress'],
-        },
-        'fare': double.tryParse(messageData['fare'] ?? '0'),
-        'distance': double.tryParse(messageData['distance'] ?? '0'),
-        'duration': int.tryParse(messageData['estimatedDuration'] ?? '0'),
-        'expiresIn': messageData['expiresIn'],
-      };
+// Method to process FCM notifications
+void processFcmNotification(Map<String, dynamic> messageData) {
+  // Check if it's a trip request notification
+  if (messageData['notificationType'] == 'tripRequest') {
+    // Initialize base trip data
+    final processedData = {
+      'tripId': messageData['tripId'],
+      'pickup': {
+        'address': messageData['pickupAddress'],
+        'latitude': double.tryParse(messageData['pickupLatitude'] ?? '0'),
+        'longitude': double.tryParse(messageData['pickupLongitude'] ?? '0'),
+      },
+      'dropoff': {
+        'address': messageData['dropoffAddress'],
+      },
+      'fare': double.tryParse(messageData['fare'] ?? '0'),
+      'distance': double.tryParse(messageData['distance'] ?? '0'),
+      'duration': int.tryParse(messageData['estimatedDuration'] ?? '0'),
+      'expiresIn': messageData['expiresIn'],
+      'totalWaitingTime': int.tryParse(messageData['totalWaitingTime'] ?? '0') ?? 0,
+    };
+    
+    // Process stops if present
+    if (messageData['hasStops'] == 'true') {
+      final stopsCount = int.tryParse(messageData['stopsCount'] ?? '0') ?? 0;
+      final List<Map<String, dynamic>> stops = [];
       
-      // Add the processed data to the trip requests stream
-      _tripRequestController.add(processedData);
+      // Process each stop (up to 5 as per backend limitation)
+      final maxStops = stopsCount > 5 ? 5 : stopsCount;
+      for (int i = 0; i < maxStops; i++) {
+        final stopIndex = i + 1; // Backend uses 1-based indexing for stops
+        
+        // Only add if address exists
+        if (messageData['stop${stopIndex}Address'] != null) {
+          stops.add({
+            'address': messageData['stop${stopIndex}Address'],
+            'latitude': double.tryParse(messageData['stop${stopIndex}Latitude'] ?? '0') ?? 0.0,
+            'longitude': double.tryParse(messageData['stop${stopIndex}Longitude'] ?? '0') ?? 0.0,
+            'waitingTime': int.tryParse(messageData['stop${stopIndex}WaitingTime'] ?? '0') ?? 0,
+            'index': i, // 0-based index for app usage
+          });
+        }
+      }
+      
+      // Add stops data to processed data
+      processedData['stops'] = stops;
+      processedData['hasStops'] = true;
+      processedData['stopsCount'] = stopsCount;
+      
+      // Check if there are additional stops not included in the message
+      if (messageData['additionalStops'] != null) {
+        processedData['additionalStops'] = 
+            int.tryParse(messageData['additionalStops'] ?? '0') ?? 0;
+      } else {
+        processedData['additionalStops'] = 0;
+      }
+    } else {
+      // No stops
+      processedData['hasStops'] = false;
+      processedData['stops'] = <Map<String, dynamic>>[];
+      processedData['stopsCount'] = 0;
+      processedData['additionalStops'] = 0;
     }
+    
+    // Add the processed data to the trip requests stream
+    _tripRequestController.add(processedData);
   }
+}
   
   @override
   void dispose() {

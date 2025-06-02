@@ -36,6 +36,48 @@ class DirectionsService {
       return null;
     }
   }
+
+  Future<List<Directions?>> getDirectionsWithStops({
+    required LatLng origin,
+    required List<LatLng> stops,
+    required LatLng destination,
+  }) async {
+    List<Directions?> allDirections = [];
+    
+    // First leg: origin to first stop
+    if (stops.isNotEmpty) {
+      final firstLeg = await getDirections(
+        origin: origin,
+        destination: stops.first,
+      );
+      allDirections.add(firstLeg);
+      
+      // Middle legs: between stops
+      for (int i = 0; i < stops.length - 1; i++) {
+        final leg = await getDirections(
+          origin: stops[i],
+          destination: stops[i + 1],
+        );
+        allDirections.add(leg);
+      }
+      
+      // Last leg: last stop to destination
+      final lastLeg = await getDirections(
+        origin: stops.last,
+        destination: destination,
+      );
+      allDirections.add(lastLeg);
+    } else {
+      // No stops, just origin to destination
+      final directRoute = await getDirections(
+        origin: origin,
+        destination: destination,
+      );
+      allDirections.add(directRoute);
+    }
+    
+    return allDirections;
+  }
 }
 
 class Directions {
