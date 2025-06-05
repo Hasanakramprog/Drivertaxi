@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:taxi_driver_app/providers/auth_provider.dart';
+import 'package:taxi_driver_app/providers/trip_provider.dart';
 import 'package:taxi_driver_app/screens/authentication/login_screen.dart';
 import 'package:taxi_driver_app/screens/home_screen.dart';
 import 'package:taxi_driver_app/screens/onboarding/onboarding_screen.dart';
+import 'package:taxi_driver_app/screens/trip_tracker_screen.dart';
 import 'package:taxi_driver_app/services/shared_prefs.dart';
 import 'package:taxi_driver_app/widgets/loading.dart';
 
 class AuthWrapper extends StatefulWidget {
-  const AuthWrapper({Key? key}) : super(key: key);
-
+  final String? initialTripId;
+  
+  const AuthWrapper({Key? key, this.initialTripId}) : super(key: key);
+  
   @override
   State<AuthWrapper> createState() => _AuthWrapperState();
 }
@@ -22,6 +26,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
   void initState() {
     super.initState();
     _checkFirstLaunch();
+
+    // Handle initial tripId if provided (e.g. from notification)
+    if (widget.initialTripId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _handleInitialTrip(widget.initialTripId!);
+      });
+    }
   }
 
   Future<void> _checkFirstLaunch() async {
@@ -35,6 +46,27 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
   }
 
+  Future<void> _handleInitialTrip(String tripId) async {
+    try {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    await tripProvider.initialize();
+    await tripProvider.loadTrip(tripId);
+    
+  // Navigate to trip tracker with the active trip
+      if (mounted && tripProvider.currentTripData != null) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => TripTrackerScreen(tripId: tripId),
+          ),
+        );
+      
+      }
+      } catch (e) {
+        print("Error loading initial trip: $e");
+        // Optionally show an error message or handle it gracefully
+      }
+  }
+  
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<DriverAuthProvider>(context);

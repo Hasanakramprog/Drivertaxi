@@ -24,8 +24,8 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
   Timer? _locationUpdateTimer;
   final DirectionsService _directionsService = DirectionsService();
     // Add these properties
-  int _currentStopIndex = -1; // -1 means heading to first stop or pickup
-  bool _hasCompletedAllStops = false;
+  // int _currentStopIndex = -1; // -1 means heading to first stop or pickup
+  // bool _hasCompletedAllStops = false;
   // Add this field
   late TripProvider _tripProvider;
   
@@ -223,10 +223,10 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
               position: stopLatLng,
               icon: BitmapDescriptor.defaultMarkerWithHue(
                 // Highlight current stop with different color
-                i == _currentStopIndex ? BitmapDescriptor.hueYellow : BitmapDescriptor.hueOrange
+                i == tripProvider.currentStopIndex ? BitmapDescriptor.hueYellow : BitmapDescriptor.hueOrange
               ),
               infoWindow: InfoWindow(
-                title: i == _currentStopIndex ? 'Current Stop' : 'Stop ${i + 1}',
+                title: i == tripProvider.currentStopIndex ? 'Current Stop' : 'Stop ${i + 1}',
                 snippet: stop['address'] ?? 'Unknown location'
               )
             ));
@@ -242,7 +242,7 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
         position: dropoffLatLng,
         icon: BitmapDescriptor.defaultMarkerWithHue(
           // Highlight dropoff if it's the current destination
-          _hasCompletedAllStops ? BitmapDescriptor.hueYellow : BitmapDescriptor.hueRed
+          tripProvider.hasCompletedAllStops ? BitmapDescriptor.hueYellow : BitmapDescriptor.hueRed
         ),
         infoWindow: InfoWindow(title: 'Dropoff: ${dropoff['address'] ?? 'Unknown destination'}')
       ));
@@ -254,18 +254,18 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
     LatLng destinationLatLng;
     String destinationLabel;
     
-    if ( stops.isNotEmpty && _currentStopIndex >= 0 && _currentStopIndex < stops.length) {
+    if ( stops.isNotEmpty && tripProvider.currentStopIndex >= 0 && tripProvider.currentStopIndex < stops.length) {
       // Heading to a stop
-      final currentStop = stops[_currentStopIndex] as Map<String, dynamic>;
+      final currentStop = stops[tripProvider.currentStopIndex] as Map<String, dynamic>;
       final stopLat = double.tryParse(currentStop['latitude']?.toString() ?? '') ?? 0.0;
       final stopLng = double.tryParse(currentStop['longitude']?.toString() ?? '') ?? 0.0;
       destinationLatLng = LatLng(stopLat, stopLng);
-      destinationLabel = 'Stop ${_currentStopIndex + 1}: ${currentStop['address'] ?? 'Unknown location'}';
+      destinationLabel = 'Stop ${tripProvider.currentStopIndex + 1}: ${currentStop['address'] ?? 'Unknown location'}';
     } else {
       // Heading to final dropoff
       destinationLatLng = dropoffLatLng;
       destinationLabel = 'Dropoff: ${dropoff['address'] ?? 'Unknown destination'}';
-      _hasCompletedAllStops = true;
+      // tripProvider.hasCompletedAllStops = true;ccc
     }
     
     // Get directions to current destination
@@ -326,41 +326,40 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
   }
   
   // Method to move to next stop or dropoff
-  void _proceedToNextStop() {
+  void _proceedToNextStop() async{
   if (_tripData == null) return;
-  
+  final tripProvider = Provider.of<TripProvider>(context, listen: false);
   final stops = (_tripData!['stops'] as List<dynamic>?) ?? [];
   
-  setState(() {
-    // Increment stop index
-    _currentStopIndex++;
+  // Increment stop index
+    final nextStopIndex = tripProvider.currentStopIndex + 1;
+    final hasCompletedAll = nextStopIndex >= stops.length;
     
-    // Check if we've completed all stops
-    if (_currentStopIndex >= stops.length) {
-      _hasCompletedAllStops = true;
-    } else {
-      _hasCompletedAllStops = false;
-    }
-  });
+    // Use the provider to update and persist
+    await tripProvider.updateStopProgress(nextStopIndex, hasCompletedAll);
   
   // Update the map
   _updateRouteAndMarkers();
 }
 
 // Method to initialize stop navigation
-  void _initializeStopNavigation() {
+  Future _initializeStopNavigation()async {
   if (_tripData == null) return;
   
   // final hasStops = _tripData!['hasStops'] == true;
+  final tripProvider = Provider.of<TripProvider>(context, listen: false);
   final stops = (_tripData!['stops'] as List<dynamic>?) ?? [];
   
-  setState(() {
-    // If there are stops, set index to first stop (0)
-    // Otherwise, skip straight to dropoff (-1 means no current stop)
-    _currentStopIndex = ( stops.isNotEmpty) ? 0 : -1;
-    _hasCompletedAllStops =  stops.isEmpty;
-  });
-  
+  // Only initialize if not already initialized
+    if (tripProvider.currentStopIndex == -1 && !tripProvider.hasCompletedAllStops) {
+      // If there are stops, set index to first stop (0)
+      // Otherwise, skip straight to dropoff
+      final newStopIndex = ( stops.isNotEmpty) ? 0 : -1;
+      final allCompleted = stops.isEmpty;
+      
+      // Use the provider to update and persist
+      await tripProvider.updateStopProgress(newStopIndex, allCompleted);
+    }
   _updateRouteAndMarkers();
 }
   Widget _buildTripActionButton() {
@@ -398,7 +397,7 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
       
     case 'in_progress':
       // Check if we need to show "Complete Trip" or "Next Stop" button
-      if (_hasCompletedAllStops) {
+      if (tripProvider.hasCompletedAllStops) {
         return ElevatedButton(
           onPressed: () async {
             final success = await tripProvider.completeTrip();
@@ -415,7 +414,7 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
       } else {
         // Get stops to show which stop we're heading to
         final stops = (_tripData!['stops'] as List<dynamic>?) ?? [];
-        final nextStopNum = _currentStopIndex + 1; // For display (1-based)
+        final nextStopNum = tripProvider.currentStopIndex + 1; // For display (1-based)
         
         return ElevatedButton(
           onPressed: () {
@@ -433,44 +432,81 @@ class _TripTrackerScreenState extends State<TripTrackerScreen> {
       return const SizedBox.shrink();
   }
 }
+  // Add this to your TripTrackerScreen class
+Future<bool> _onWillPop() async {
+  // Only show confirmation if trip is still active
+  if (_tripData != null) {
+    final status = _tripData!['status'] as String;
+    if (status == 'driver_accepted' || status == 'driver_arrived' || status == 'in_progress') {
+      // Show confirmation dialog
+      final result = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Return to Home?'),
+          content: const Text(
+            'You can always return to track this trip from the home screen. '
+            'The trip will continue in the background.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('CANCEL'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('RETURN TO HOME'),
+            ),
+          ],
+        ),
+      );
+      
+      return result ?? false;
+    }
+  }
   
+  // If trip is completed or there's no active trip, allow navigation back
+  return true;
+}
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Trip Tracker'),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Stack(
-              children: [
-                GoogleMap(
-                  initialCameraPosition: const CameraPosition(
-                    target: LatLng(0, 0), // Will be updated immediately
-                    zoom: 14,
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Trip Tracker'),
+        ),
+        body: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : Stack(
+                children: [
+                  GoogleMap(
+                    initialCameraPosition: const CameraPosition(
+                      target: LatLng(0, 0), // Will be updated immediately
+                      zoom: 14,
+                    ),
+                    onMapCreated: _onMapCreated,
+                    myLocationEnabled: true,
+                    myLocationButtonEnabled: true,
+                    markers: _markers,
+                    polylines: _polylines,
                   ),
-                  onMapCreated: _onMapCreated,
-                  myLocationEnabled: true,
-                  myLocationButtonEnabled: true,
-                  markers: _markers,
-                  polylines: _polylines,
-                ),
-                // Trip details panel at the top
-                Positioned(
-                  top: 10,
-                  left: 10,
-                  right: 10,
-                  child: _buildTripStatusPanel(),
-                ),
-                // Action button at the bottom
-                Positioned(
-                  bottom: 20,
-                  left: 20,
-                  right: 20,
-                  child: _buildTripActionButton(),
-                ),
-              ],
-            ),
+                  // Trip details panel at the top
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    right: 10,
+                    child: _buildTripStatusPanel(),
+                  ),
+                  // Action button at the bottom
+                  Positioned(
+                    bottom: 20,
+                    left: 20,
+                    right: 20,
+                    child: _buildTripActionButton(),
+                  ),
+                ],
+              ),
+      ),
     );
   }
   
@@ -479,7 +515,7 @@ Widget _buildTripStatusPanel() {
   
   final status = _tripData!['status'] as String;
   final statusText = _getStatusDisplayText(status);
-  
+  final tripProvider = Provider.of<TripProvider>(context, listen: false);
   // Access nested pickup and dropoff data
   final pickup = _tripData!['pickup'] as Map<String, dynamic>? ?? {};
   final dropoff = _tripData!['dropoff'] as Map<String, dynamic>? ?? {};
@@ -515,14 +551,14 @@ Widget _buildTripStatusPanel() {
             const Divider(),
             // Current navigation status
             if (status == 'in_progress') ...[
-              if (_currentStopIndex >= 0 && _currentStopIndex < stops.length) ...[
+              if (tripProvider.currentStopIndex >= 0 && tripProvider.currentStopIndex < stops.length) ...[
                 Row(
                   children: [
                     const Icon(Icons.navigation, color: Colors.blue),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Navigating to Stop ${_currentStopIndex + 1}',
+                        'Navigating to Stop ${tripProvider.currentStopIndex + 1}',
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           color: Colors.blue,
@@ -531,7 +567,7 @@ Widget _buildTripStatusPanel() {
                     ),
                   ],
                 ),
-              ] else if (_hasCompletedAllStops) ...[
+              ] else if (tripProvider.hasCompletedAllStops) ...[
                 Row(
                   children: [
                     const Icon(Icons.navigation, color: Colors.blue),

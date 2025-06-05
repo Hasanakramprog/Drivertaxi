@@ -11,6 +11,7 @@ import 'package:taxi_driver_app/screens/trip_history_screen.dart';
 import 'package:taxi_driver_app/widgets/driver_map.dart';
 import 'package:taxi_driver_app/widgets/online_toggle.dart';
 import 'package:taxi_driver_app/widgets/trip_request_dialog.dart';
+import 'package:taxi_driver_app/screens/trip_tracker_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -35,6 +36,10 @@ class _HomeScreenState extends State<HomeScreen> {
       
       // Listen for new trip requests
       tripProvider.tripRequests.listen(_handleTripRequest);
+    });
+    
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkForActiveTrip();
     });
   }
 
@@ -82,6 +87,37 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
   
+  Future<void> _checkForActiveTrip() async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    
+    // Initialize the trip provider if not already initialized
+    await tripProvider.initialize();
+    
+    // Check if there's an active trip
+    if (tripProvider.currentTripId != null && tripProvider.currentTripData != null) {
+      final tripStatus = tripProvider.currentTripData!['status'] as String?;
+      
+      // Only navigate if trip is in an active state
+      if (tripStatus == 'driver_accepted' || tripStatus == 'driver_arrived' || 
+          tripStatus == 'in_progress') {
+        
+        // Allow the UI to fully render first
+        await Future.delayed(const Duration(milliseconds: 300));
+        
+        // Navigate to trip tracker
+        if (mounted) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => TripTrackerScreen(
+                tripId: tripProvider.currentTripId!,
+              ),
+            ),
+          );
+        }
+      }
+    }
+  }
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -108,44 +144,51 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: Stack(
+      body: Column(
         children: [
-          // Map covering the whole screen
-          const DriverMap(),
-          
-          // Online/Offline toggle at the top
-          const Positioned(
-            top: 16.0,
-            left: 16.0,
-            right: 16.0,
-            child: OnlineToggle(),
-          ),
-          
-          // Trip info card if there's an active trip
-          Consumer<TripProvider>(
-            builder: (context, tripProvider, _) {
-              if (tripProvider.hasActiveTripRequest) {
-                return Positioned(
-                  bottom: 16.0,
+          _buildActiveTripBanner(), // Add this at the top
+          Expanded(
+            child: Stack(
+              children: [
+                // Map covering the whole screen
+                const DriverMap(),
+                
+                // Online/Offline toggle at the top
+                const Positioned(
+                  top: 16.0,
                   left: 16.0,
                   right: 16.0,
-                  child: _buildActiveTripCard(tripProvider),
-                );
-              }
-              return const SizedBox.shrink();
+                  child: OnlineToggle(),
+                ),
+                
+                // Trip info card if there's an active trip
+                Consumer<TripProvider>(
+                  builder: (context, tripProvider, _) {
+                    if (tripProvider.hasActiveTripRequest) {
+                      return Positioned(
+                        bottom: 16.0,
+                        left: 16.0,
+                        right: 16.0,
+                        child: _buildActiveTripCard(tripProvider),
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
+              ],
+            ),
+          ),
+          // FAB for earnings
+          FloatingActionButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const EarningsScreen()),
+              );
             },
+            child: const Icon(Icons.attach_money),
           ),
         ],
-      ),
-      // FAB for earnings
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const EarningsScreen()),
-          );
-        },
-        child: const Icon(Icons.attach_money),
       ),
     );
   }
@@ -211,17 +254,17 @@ class _HomeScreenState extends State<HomeScreen> {
   
   Widget _buildActionButton(String status, TripProvider tripProvider) {
     switch (status) {
-      case 'accepted':
+      case 'driver_accepted':
         return ElevatedButton(
           onPressed: () => tripProvider.markArrived(),
           child: const Text('ARRIVED'),
         );
-      case 'arrived':
+      case 'driver_arrived':
         return ElevatedButton(
           onPressed: () => tripProvider.startTrip(),
           child: const Text('START TRIP'),
         );
-      case 'inprogress':
+      case 'completed':
         return ElevatedButton(
           onPressed: () => tripProvider.completeTrip(),
           child: const Text('COMPLETE'),
@@ -233,17 +276,93 @@ class _HomeScreenState extends State<HomeScreen> {
   
   String _getTripStatusText(String status) {
     switch (status) {
-      case 'accepted':
+      case 'driver_accepted':
         return 'Heading to Pickup';
-      case 'arriving':
-      case 'arrived':
+      case 'driver_arrived':
         return 'At Pickup Location';
-      case 'inprogress':
+      case 'in_progress':
         return 'Trip in Progress';
       case 'completed':
         return 'Trip Completed';
       default:
         return 'Trip Status: $status';
     }
+  }
+  
+  Widget _buildActiveTripBanner() {
+    final tripProvider = Provider.of<TripProvider>(context);
+    
+    // If no active trip, return empty widget
+    if (tripProvider.currentTripId == null || tripProvider.currentTripData == null) {
+      return const SizedBox.shrink();
+    }
+    
+    final tripData = tripProvider.currentTripData!;
+    final status = tripData['status'] as String?;
+    
+    // Only show banner for active states
+    if (status == 'driver_accepted' || status == 'driver_arrived' || status == 'in_progress') {
+      String statusText = 'Active Trip';
+      String stopInfo = '';
+      
+      // Add stop information if in progress
+      if (status == 'in_progress' && tripProvider.currentStopIndex >= 0) {
+        final stops = (tripData['stops'] as List<dynamic>?) ?? [];
+        if (stops.isNotEmpty && !tripProvider.hasCompletedAllStops) {
+          stopInfo = ' - Stop ${tripProvider.currentStopIndex + 1}/${stops.length}';
+        } else if (tripProvider.hasCompletedAllStops) {
+          stopInfo = ' - Final dropoff';
+        }
+      }
+      
+      return GestureDetector(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => TripTrackerScreen(
+                tripId: tripProvider.currentTripId!,
+              ),
+            ),
+          );
+        },
+        child: Container(
+          // Banner styling
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          color: Colors.green.withOpacity(0.1),
+          child: Row(
+            children: [
+              const Icon(Icons.directions_car, color: Colors.green),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Resume Trip$stopInfo',
+                  style: const TextStyle(
+                    color: Colors.green,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const Text(
+                'CONTINUE',
+                style: TextStyle(
+                  color: Colors.green,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.arrow_forward_ios,
+                color: Colors.green,
+                size: 12,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    return const SizedBox.shrink();
   }
 }

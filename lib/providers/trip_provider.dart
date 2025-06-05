@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taxi_driver_app/main.dart';
 import 'package:taxi_driver_app/screens/trip_tracker_screen.dart';
 
@@ -25,6 +26,28 @@ class TripProvider with ChangeNotifier {
   Map<String, dynamic>? get currentTripData => _currentTripData;
   Stream<Map<String, dynamic>> get tripRequests => _tripRequestController.stream;
   bool get hasActiveTripRequest => _currentTripId != null;
+  
+  // Add these properties
+  int _currentStopIndex = -1;
+  bool _hasCompletedAllStops = false;
+  
+  // Add getters
+  int get currentStopIndex => _currentStopIndex;
+  bool get hasCompletedAllStops => _hasCompletedAllStops;
+  // Add setter methods
+  Future<void> updateStopProgress(int stopIndex, bool completedAllStops) async {
+    _currentStopIndex = stopIndex;
+    _hasCompletedAllStops = completedAllStops;
+    
+    // Save to persistent storage
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (_currentTripId != null) {
+      await prefs.setInt('stop_index_${_currentTripId}', stopIndex);
+      await prefs.setBool('all_stops_completed_${_currentTripId}', completedAllStops);
+    }
+    
+    notifyListeners();
+  }
   
   // Initialize provider
   Future<void> initialize() async {
@@ -73,6 +96,11 @@ class TripProvider with ChangeNotifier {
         'updatedAt': FieldValue.serverTimestamp(),
       });
     }
+    
+    // Load stop progress from persistent storage
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    _currentStopIndex = prefs.getInt('stop_index_${tripId}') ?? -1;
+    _hasCompletedAllStops = prefs.getBool('all_stops_completed_${tripId}') ?? false;
     
     notifyListeners();
   } catch (e) {
@@ -179,6 +207,22 @@ Future<bool> acceptTrip(String tripId) async {
       }
       
       notifyListeners();
+      
+      // Get shared preferences instance
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.remove('active_trip_id');
+    
+      // Clean up stored stop progress
+      if (_currentTripId != null) {
+        await prefs.remove('stop_index_${_currentTripId}');
+        await prefs.remove('all_stops_completed_${_currentTripId}');
+        await prefs.remove('active_trip_id');
+      }
+      
+      // Reset in memory
+      _currentStopIndex = -1;
+      _hasCompletedAllStops = false;
+      
       return true;
     } catch (e) {
       print('Error completing trip: $e');

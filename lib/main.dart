@@ -27,6 +27,24 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void _handleFcmMessage(RemoteMessage message) {
   print('Message data: ${message.data}');
   
+  // Handle trip updates
+  if (message.data['notificationType'] == 'tripUpdate') {
+    final tripId = message.data['tripId'];
+    if (tripId != null) {
+      // Save the trip ID for when app is reopened
+      _saveActiveTrip(tripId);
+      
+      // If app is in foreground, navigate to trip
+      if (navigatorKey.currentContext != null) {
+        final tripProvider = Provider.of<TripProvider>(
+          navigatorKey.currentContext!,
+          listen: false
+        );
+        tripProvider.loadTrip(tripId);
+      }
+    }
+  }
+  
   if (message.notification != null) {
     print('Message notification: ${message.notification!.title}, ${message.notification!.body}');
   }
@@ -59,10 +77,17 @@ Future<void> _storeTripRequest(Map<String, dynamic> data) async {
   print("Storing trip request for later: $data");
 }
 
+Future<void> _saveActiveTrip(String tripId) async {
+  SharedPreferences prefs = await SharedPreferences.getInstance();
+  await prefs.setString('active_trip_id', tripId);
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  
+    // Check for saved active trip
+  SharedPreferences prefs = await SharedPreferences.getInstance();
+  final activeTripId = prefs.getString('active_trip_id'); 
   // Set up FCM background handler
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
     // Request notification permissions
@@ -70,7 +95,7 @@ void main() async {
   
   // Set up foreground message handlers
   _setupForegroundMessageHandling();
-  runApp(const MyApp());
+  runApp(MyApp(initialTripId: activeTripId));
 }
 Future<void> _requestNotificationPermissions() async {
   final messaging = FirebaseMessaging.instance;
@@ -143,7 +168,9 @@ void _setupForegroundMessageHandling() {
   });
 }
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  final String? initialTripId;
+  
+  const MyApp({Key? key, this.initialTripId}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -173,7 +200,7 @@ class MyApp extends StatelessWidget {
           visualDensity: VisualDensity.adaptivePlatformDensity,
         ),
         debugShowCheckedModeBanner: false,
-        home: const AuthWrapper(),
+         home: AuthWrapper(initialTripId: initialTripId),
       ),
     );
   }
