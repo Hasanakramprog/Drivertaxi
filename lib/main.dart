@@ -12,7 +12,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-
+import 'package:taxi_driver_app/services/face_verification_service.dart';
 // Define the global navigator key
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -81,6 +81,17 @@ Future<void> _saveActiveTrip(String tripId) async {
   SharedPreferences prefs = await SharedPreferences.getInstance();
   await prefs.setString('active_trip_id', tripId);
 }
+// Add this function after _setupForegroundMessageHandling()
+Future<void> _checkDailyVerification() async {
+  final faceService = FaceVerificationService();
+  
+  // Check if verification is needed
+  if (await faceService.needsDailyVerification()) {
+    // Store a flag that verification is needed
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('needs_face_verification', true);
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -95,6 +106,8 @@ void main() async {
   
   // Set up foreground message handlers
   _setupForegroundMessageHandling();
+    // Check daily verification status
+  await _checkDailyVerification();
   runApp(MyApp(initialTripId: activeTripId));
 }
 Future<void> _requestNotificationPermissions() async {

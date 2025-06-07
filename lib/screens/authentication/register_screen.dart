@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:taxi_driver_app/providers/auth_provider.dart';
 import 'package:taxi_driver_app/widgets/custom_button.dart';
 import 'package:taxi_driver_app/widgets/loading.dart';
+import 'package:taxi_driver_app/services/face_verification_service.dart';
+import 'package:taxi_driver_app/screens/face_verification_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({Key? key}) : super(key: key);
@@ -28,7 +30,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _isPasswordVisible = false;
   bool _isConfirmPasswordVisible = false;
   bool _isLoading = false;
+  bool _faceVerificationCompleted = false;
   String _errorMessage = '';
+
+  final FaceVerificationService _faceService = FaceVerificationService();
 
   @override
   void dispose() {
@@ -44,63 +49,116 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  Future<void> _register() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
-
-    setState(() {
-      _isLoading = true;
-      _errorMessage = '';
-    });
-
+  Future<void> _setupFaceVerification() async {
     try {
-      final authProvider = Provider.of<DriverAuthProvider>(context, listen: false);
-      
-      // Create vehicle details map
-      final vehicleDetails = {
-        'model': _vehicleModelController.text.trim(),
-        'color': _vehicleColorController.text.trim(),
-        'licensePlate': _licensePlateController.text.trim(),
-        'year': _vehicleYearController.text.trim(),
-      };
-      
-      // Call the registerDriver method with all required parameters
-      await authProvider.registerDriver(
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
-        fullName: _nameController.text.trim(),
-        phoneNumber: _phoneController.text.trim(),
-        vehicleDetails: vehicleDetails,
+      final result = await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => const FaceVerificationScreen(isSetup: true),
+        ),
       );
       
-      if (mounted) {
-        // Show success message
+      if (result == true) {
+        setState(() {
+          _faceVerificationCompleted = true;
+        });
+        
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Registration successful! Please wait for approval.'),
-            duration: Duration(seconds: 3),
+            content: Text('Face verification setup completed!'),
+            backgroundColor: Colors.green,
           ),
         );
-        
-        // Short delay to allow the user to see the message
-        await Future.delayed(const Duration(seconds: 1));
-        
-        // Navigate back to login screen
-        Navigator.pop(context);
       }
     } catch (e) {
-      setState(() {
-        _errorMessage = e.toString();
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error setting up face verification: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
+
+  // Update your _register method in register_screen.dart
+Future<void> _register() async {
+  if (!_formKey.currentState!.validate()) {
+    return;
+  }
+
+  // Check if face verification is completed
+  if (!_faceVerificationCompleted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Please complete face verification setup before registering.'),
+        backgroundColor: Colors.orange,
+      ),
+    );
+    return;
+  }
+
+  setState(() {
+    _isLoading = true;
+    _errorMessage = '';
+  });
+
+  try {
+    final authProvider = Provider.of<DriverAuthProvider>(context, listen: false);
+    
+    // ✅ Get the stored face verification URL from the service
+    final faceService = FaceVerificationService();
+    final faceVerificationUrl = faceService.tempFaceVerificationUrl;
+    
+    if (faceVerificationUrl == null) {
+      throw 'Face verification image not found. Please complete face verification again.';
+    }
+    
+    print('Using face verification URL: $faceVerificationUrl'); // Debug log
+    
+    // Create vehicle details map
+    final vehicleDetails = {
+      'model': _vehicleModelController.text.trim(),
+      'color': _vehicleColorController.text.trim(),
+      'licensePlate': _licensePlateController.text.trim(),
+      'year': _vehicleYearController.text.trim(),
+    };
+    
+    // ✅ Call the new registration method with face verification URL
+    await authProvider.registerDriverWithFaceVerification(
+      email: _emailController.text.trim(),
+      password: _passwordController.text,
+      fullName: _nameController.text.trim(),
+      phoneNumber: _phoneController.text.trim(),
+      vehicleDetails: vehicleDetails,
+      faceVerificationImageUrl: faceVerificationUrl, // ✅ Pass the stored URL
+    );
+    
+    // ✅ Clear the temporary URL after successful registration
+    faceService.clearTempFaceVerificationUrl();
+    
+    if (mounted) {
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Registration successful! Face verification is setup. Please wait for approval.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      
+      await Future.delayed(const Duration(seconds: 1));
+      Navigator.pop(context);
+    }
+  } catch (e) {
+    setState(() {
+      _errorMessage = e.toString();
+    });
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -252,6 +310,89 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                         const SizedBox(height: 32),
                         
+                        // Face Verification Section
+                        _buildSectionHeader('Face Verification Setup'),
+                        const SizedBox(height: 16),
+                        
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: _faceVerificationCompleted 
+                                ? Colors.green.shade50 
+                                : Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _faceVerificationCompleted 
+                                  ? Colors.green.shade300 
+                                  : Colors.blue.shade300,
+                            ),
+                          ),
+                          child: Column(
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    _faceVerificationCompleted 
+                                        ? Icons.check_circle 
+                                        : Icons.face,
+                                    color: _faceVerificationCompleted 
+                                        ? Colors.green 
+                                        : Colors.blue,
+                                    size: 32,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _faceVerificationCompleted 
+                                              ? 'Face Verification Setup Complete'
+                                              : 'Setup Face Verification',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: _faceVerificationCompleted 
+                                                ? Colors.green.shade700 
+                                                : Colors.blue.shade700,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _faceVerificationCompleted 
+                                              ? 'Your face verification has been setup successfully. You\'ll need to verify daily to go online.'
+                                              : 'For security, we need to setup face verification. This will be used for daily identity checks.',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.grey.shade700,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (!_faceVerificationCompleted) ...[
+                                const SizedBox(height: 16),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _setupFaceVerification,
+                                    icon: const Icon(Icons.face),
+                                    label: const Text('Setup Face Verification'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.blue,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 32),
+                        
                         // Vehicle Information Section
                         _buildSectionHeader('Vehicle Information'),
                         const SizedBox(height: 16),
@@ -335,8 +476,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         CustomButton(
                           text: 'Register as Driver',
                           onPressed: _register,
-                          color: Theme.of(context).primaryColor,
+                          color: _faceVerificationCompleted 
+                              ? Theme.of(context).primaryColor 
+                              : Colors.grey,
                         ),
+                        
+                        if (!_faceVerificationCompleted)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              'Please complete face verification setup to proceed with registration.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                                fontStyle: FontStyle.italic,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        
                         const SizedBox(height: 16),
                         
                         Row(

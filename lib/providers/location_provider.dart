@@ -17,6 +17,7 @@ class LocationProvider with ChangeNotifier {
   
   // Add this to store the current position
   LocationData? _currentPosition;
+  GoogleMapController? _mapController; // Add this to store map controller
 
   // Getters
   bool get isOnline => _isOnline;
@@ -32,21 +33,81 @@ class LocationProvider with ChangeNotifier {
   Future<void> initialize() async {
     await _checkPermission();
     if (_permissionGranted) {
-      // Get initial position
-      try {
-        _currentPosition = await _location.getLocation();
+      // Get initial position and move to it
+      await _getCurrentLocationAndNavigate();
+    }
+  }
+
+  // Get current location and automatically navigate to it
+  Future<void> _getCurrentLocationAndNavigate() async {
+    try {
+      print('Getting current location...');
+      _currentPosition = await _location.getLocation();
+      
+      if (_currentPosition != null) {
+        print('Current location obtained: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}');
+        
+        // If map controller is available, animate to current position
+        if (_mapController != null) {
+          await _animateToCurrentPosition();
+        }
+        
         notifyListeners();
-      } catch (e) {
-        print('Error getting initial location: $e');
+      }
+    } catch (e) {
+      print('Error getting initial location: $e');
+    }
+  }
+
+  // Store map controller reference
+  void setMapController(GoogleMapController controller) {
+    _mapController = controller;
+    
+    // If we already have current position, animate to it
+    if (_currentPosition != null) {
+      _animateToCurrentPosition();
+    }
+  }
+
+  // Private method to animate to current position
+  Future<void> _animateToCurrentPosition() async {
+    if (_mapController != null && _currentPosition != null) {
+      final latitude = _currentPosition!.latitude;
+      final longitude = _currentPosition!.longitude;
+      
+      if (latitude != null && longitude != null) {
+        try {
+          await _mapController!.animateCamera(
+            CameraUpdate.newCameraPosition(
+              CameraPosition(
+                target: LatLng(latitude, longitude),
+                zoom: 16.0, // Adjust zoom level as needed
+                bearing: _currentPosition!.heading ?? 0.0,
+              ),
+            ),
+          );
+          print('Camera animated to current position');
+        } catch (e) {
+          print('Error animating camera: $e');
+        }
       }
     }
+  }
+
+  // Public method to manually get current location and navigate
+  Future<void> getCurrentLocationAndNavigate() async {
+    if (!_permissionGranted) {
+      await _checkPermission();
+      if (!_permissionGranted) return;
+    }
+    
+    await _getCurrentLocationAndNavigate();
   }
 
   // Check and request location permission
   Future<void> _checkPermission() async {
     bool serviceEnabled;
     PermissionStatus foregroundPermissionStatus;
-    PermissionStatus backgroundPermissionStatus;
 
     // Check if location service is enabled
     serviceEnabled = await _location.serviceEnabled();
@@ -70,24 +131,21 @@ class LocationProvider with ChangeNotifier {
       }
     }
 
-    // Try to enable background mode (this will show the system dialog for background permission)
+    // Try to enable background mode
     try {
       bool backgroundEnabled = await _location.enableBackgroundMode(enable: true);
       if (!backgroundEnabled) {
-        // If background mode couldn't be enabled, we should inform the user
         print('Background location mode could not be enabled');
       }
     } catch (e) {
       print('Error enabling background mode: $e');
-      // We should still continue even if background permission is denied
-      // The app will work in foreground at least
     }
 
-    // Set accuracy to high (for better location tracking)
+    // Set accuracy to high
     _location.changeSettings(
       accuracy: LocationAccuracy.high,
-      interval: 5000,  // Update interval in milliseconds
-      distanceFilter: 5, // Minimum distance in meters to trigger update
+      interval: 5000,
+      distanceFilter: 5,
     );
 
     _permissionGranted = true;
@@ -98,25 +156,11 @@ class LocationProvider with ChangeNotifier {
   Future<void> goOnline(BuildContext context) async {
     if (_auth.currentUser == null) return;
     
-    // Check permissions first
     if (!_permissionGranted) {
       await _checkPermission();
       if (!_permissionGranted) return;
     }
-
-    // // Specifically check background mode
-    // bool backgroundEnabled = false;
-    // try {
-    //   backgroundEnabled = await _location.enableBackgroundMode(enable: true);
-    // } catch (e) {
-    //   // Permission was denied
-    //   print("Background permission denied: $e");
-    //   // Ask user to grant permission via settings
-    //   requestBackgroundPermission(context);
-    //   return;
-    // }
     
-    // Only proceed if we have background permission or user chose to continue anyway
     try {
       // Update driver status in Firestore
       await _firestore.collection('drivers').doc(_auth.currentUser!.uid).update({
@@ -127,16 +171,16 @@ class LocationProvider with ChangeNotifier {
 
       // Start location tracking
       _locationSubscription = _location.onLocationChanged.listen((locationData) {
-        // Update the current position property
         _currentPosition = locationData;
-        // Update the location in Firestore
         _updateDriverLocation(locationData);
-        // Notify listeners so UI reflects the changes
         notifyListeners();
       });
 
       _isOnline = true;
       notifyListeners();
+      
+      // Get current location when going online
+      await _getCurrentLocationAndNavigate();
     } catch (e) {
       print('Error going online: $e');
     }
@@ -147,14 +191,12 @@ class LocationProvider with ChangeNotifier {
     if (_auth.currentUser == null) return;
 
     try {
-      // Update driver status in Firestore
       await _firestore.collection('drivers').doc(_auth.currentUser!.uid).update({
         'isOnline': false,
         'lastOfflineAt': FieldValue.serverTimestamp(),
         'isAvailable': false
       });
 
-      // Stop location updates
       await _locationSubscription?.cancel();
       _locationSubscription = null;
 
@@ -169,7 +211,6 @@ class LocationProvider with ChangeNotifier {
   Future<void> _updateDriverLocation(LocationData locationData) async {
     if (_auth.currentUser == null) return;
     
-    // Check if latitude and longitude are not null
     final latitude = locationData.latitude;
     final longitude = locationData.longitude;
     
@@ -183,7 +224,7 @@ class LocationProvider with ChangeNotifier {
 
       await _firestore.collection('drivers').doc(_auth.currentUser!.uid).update({
         'location': location,
-        'heading': locationData.heading ?? 0.0, // Provide default if null
+        'heading': locationData.heading ?? 0.0,
         'lastLocationUpdate': FieldValue.serverTimestamp()
       });
     } catch (e) {
@@ -191,19 +232,27 @@ class LocationProvider with ChangeNotifier {
     }
   }
   
-  // For moving the camera to current position
+  // For moving the camera to current position (public method)
   Future<void> animateToCurrentPosition(GoogleMapController controller) async {
-    if (_currentPosition != null) {
-      final latitude = _currentPosition!.latitude;
-      final longitude = _currentPosition!.longitude;
-      
-      // Only proceed if we have valid coordinates
-      if (latitude != null && longitude != null) {
-        controller.animateCamera(
-          CameraUpdate.newLatLng(LatLng(latitude, longitude)),
-        );
-      }
+    _mapController = controller;
+    await _animateToCurrentPosition();
+  }
+
+  // Add method to refresh current location
+  Future<void> refreshCurrentLocation() async {
+    if (!_permissionGranted) {
+      await _checkPermission();
+      if (!_permissionGranted) return;
     }
+    
+    await _getCurrentLocationAndNavigate();
+  }
+
+  // Clean up when provider is disposed
+  @override
+  void dispose() {
+    _locationSubscription?.cancel();
+    super.dispose();
   }
 
   // Add this method to your LocationProvider class

@@ -29,6 +29,15 @@ class DriverAuthProvider with ChangeNotifier {
   Map<String, dynamic> get driverData => _driverData;
   AuthStatus get status => _status;
   
+  // ✅ NEW FACE VERIFICATION GETTERS
+  bool get hasFaceVerificationSetup => _driverData['faceVerificationSetup'] ?? false;
+  bool get isActiveToday => _driverData['isActiveToday'] ?? false;
+  String get faceVerificationStatus => _driverData['faceVerificationStatus'] ?? 'pending';
+  DateTime? get lastFaceVerification {
+    final timestamp = _driverData['lastFaceVerification'] as Timestamp?;
+    return timestamp?.toDate();
+  }
+  
   DriverAuthProvider() {
     initializeAuth();
   }
@@ -108,7 +117,6 @@ class DriverAuthProvider with ChangeNotifier {
           password: password,
         );
       } catch (firebaseAuthError) {
-        final User? user = userCredential.user;
         print('Firebase Auth Error: $firebaseAuthError');
         _status = AuthStatus.unauthenticated;
         notifyListeners();
@@ -173,6 +181,14 @@ class DriverAuthProvider with ChangeNotifier {
           'fcmToken': fcmToken,
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
+          
+          // ✅ FACE VERIFICATION FIELDS
+          'faceVerificationSetup': true, // Set to true since they completed setup
+          'lastFaceVerification': null,
+          'faceVerificationStatus': 'setup_complete',
+          'isActiveToday': false,
+          'baseFaceImageUrl': null, // This will be set by the face verification service
+          'faceVerificationHistory': [], // Array to track verification attempts
         });
       } catch (firestoreError) {
         print('Firestore error creating profile: $firestoreError');
@@ -192,6 +208,101 @@ class DriverAuthProvider with ChangeNotifier {
       _status = AuthStatus.unauthenticated;
       notifyListeners();
       rethrow;
+    }
+  }
+  
+  // ✅ NEW FACE VERIFICATION METHODS
+  Future<void> updateFaceVerificationStatus({
+    required bool isSuccess,
+    String? imageUrl,
+  }) async {
+    try {
+      if (_user == null) return;
+      
+      final updateData = {
+        'lastFaceVerification': FieldValue.serverTimestamp(),
+        'faceVerificationStatus': isSuccess ? 'verified' : 'failed',
+        'isActiveToday': isSuccess,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      
+      if (imageUrl != null) {
+        updateData['baseFaceImageUrl'] = imageUrl;
+      }
+      
+      // Add to verification history
+      updateData['faceVerificationHistory'] = FieldValue.arrayUnion([
+        {
+          'timestamp': FieldValue.serverTimestamp(),
+          'success': isSuccess,
+          'method': 'mobile_app',
+        }
+      ]);
+      
+      await _firestore.collection('drivers').doc(_user!.uid).update(updateData);
+      
+      // Update local data
+      _driverData.addAll(updateData);
+      notifyListeners();
+      
+    } catch (e) {
+      print('Error updating face verification status: $e');
+      throw 'Failed to update verification status';
+    }
+  }
+
+  Future<void> setupFaceVerification(String imageUrl) async {
+    try {
+      if (_user == null) return;
+      
+      await _firestore.collection('drivers').doc(_user!.uid).update({
+        'faceVerificationSetup': true,
+        'baseFaceImageUrl': imageUrl,
+        'faceVerificationStatus': 'setup_complete',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      
+      // Update local data
+      _driverData['faceVerificationSetup'] = true;
+      _driverData['baseFaceImageUrl'] = imageUrl;
+      _driverData['faceVerificationStatus'] = 'setup_complete';
+      
+      notifyListeners();
+      
+    } catch (e) {
+      print('Error setting up face verification: $e');
+      throw 'Failed to setup face verification';
+    }
+  }
+
+  Future<bool> needsDailyVerification() async {
+    try {
+      if (_user == null) return true;
+      
+      // Check if setup is complete
+      if (!(_driverData['faceVerificationSetup'] ?? false)) {
+        return true;
+      }
+      
+      final lastVerification = _driverData['lastFaceVerification'] as Timestamp?;
+      
+      if (lastVerification == null) return true;
+      
+      final now = DateTime.now();
+      final lastVerificationDate = lastVerification.toDate();
+      final difference = now.difference(lastVerificationDate);
+      
+      // Need verification if more than 24 hours
+      return difference.inHours >= 24;
+    } catch (e) {
+      print('Error checking verification needs: $e');
+      return true; // Default to requiring verification
+    }
+  }
+
+  Future<void> refreshDriverData() async {
+    if (_user != null) {
+      await checkAndCreateDriverProfile();
     }
   }
   
@@ -222,6 +333,116 @@ class DriverAuthProvider with ChangeNotifier {
       
       // Auth state changes listener will handle the rest
     } catch (e) {
+      rethrow;
+    }
+  }
+
+  // Add this method to your DriverAuthProvider class
+  Future<void> registerDriverWithFaceVerification({
+    required String email,
+    required String password,
+    required String fullName,
+    required String phoneNumber,
+    required Map<String, dynamic> vehicleDetails,
+    required String faceVerificationImageUrl, // The stored URL
+  }) async {
+    try {
+      _status = AuthStatus.loading;
+      notifyListeners();
+      
+      // Create user account first
+      late UserCredential userCredential;
+      try {
+        userCredential = await _auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+      } catch (firebaseAuthError) {
+        print('Firebase Auth Error: $firebaseAuthError');
+        _status = AuthStatus.unauthenticated;
+        notifyListeners();
+        if (firebaseAuthError is FirebaseAuthException) {
+          if (firebaseAuthError.code == 'email-already-in-use') {
+            throw 'Email is already registered. Please use a different email or try logging in.';
+          } else if (firebaseAuthError.code == 'weak-password') {
+            throw 'Password is too weak. Please use a stronger password.';
+          } else if (firebaseAuthError.code == 'invalid-email') {
+            throw 'Invalid email format. Please check your email address.';
+          }
+        }
+        throw 'Failed to create account. Please try again later.';
+      }
+      
+      final User? user = userCredential.user;
+      if (user == null) {
+        throw 'Account creation failed.';
+      }
+      
+      // Update display name
+      try {
+        await user.updateDisplayName(fullName);
+      } catch (e) {
+        print('Error updating display name: $e');
+      }
+      
+      // Get FCM token
+      String? fcmToken;
+      try {
+        fcmToken = await FirebaseMessaging.instance.getToken();
+      } catch (e) {
+        print("Error getting FCM token: $e");
+      }
+      
+      // Create driver profile with face verification URL
+      try {
+        await _firestore.collection('drivers').doc(user.uid).set({
+          'uid': user.uid,
+          'email': email,
+          'displayName': fullName,
+          'phoneNumber': phoneNumber,
+          'vehicleDetails': vehicleDetails,
+          'isApproved': false,
+          'isOnline': false,
+          'isAvailable': false,
+          'rating': 5.0,
+          'ratingCount': 0,
+          'tripCount': 0,
+          'totalEarnings': 0,
+          'accountStatus': 'pending',
+          'documents': {
+            'license': false,
+            'insurance': false,
+            'vehicleRegistration': false
+          },
+          'location': null,
+          'fcmToken': fcmToken,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+          
+          // ✅ Face verification fields with the stored URL
+          'faceVerificationSetup': true,
+          'lastFaceVerification': null,
+          'faceVerificationStatus': 'setup_complete',
+          'isActiveToday': false,
+          'baseFaceImageUrl': faceVerificationImageUrl, // ✅ Use the stored URL
+          'faceVerificationHistory': [],
+        });
+      } catch (firestoreError) {
+        print('Firestore error creating profile: $firestoreError');
+        try {
+          await user.delete();
+        } catch (e) {
+          print('Error cleaning up user after Firestore failure: $e');
+        }
+        throw 'Failed to create driver profile. Please try again later.';
+      }
+      
+      await checkAndCreateDriverProfile();
+      _status = AuthStatus.authenticated;
+      notifyListeners();
+    } catch (e) {
+      _status = AuthStatus.unauthenticated;
+      notifyListeners();
       rethrow;
     }
   }

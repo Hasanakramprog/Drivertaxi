@@ -20,13 +20,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _vehicleMakeController = TextEditingController();
   final _vehicleModelController = TextEditingController();
   final _vehicleYearController = TextEditingController();
-  final _vehicleColorController = TextEditingController();
   final _licensePlateController = TextEditingController();
+  final _vehicleColorController = TextEditingController();
+  
   
   bool _isLoading = false;
   bool _isEditing = false;
+  bool _isImageLoading = true; // Add this for image loading state
   Map<String, dynamic> _driverData = {};
   
+  double _todayEarnings = 0.0;
+  int _todayTrips = 0;
+
   @override
   void initState() {
     super.initState();
@@ -40,7 +45,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _vehicleMakeController.dispose();
     _vehicleModelController.dispose();
     _vehicleYearController.dispose();
-    _vehicleColorController.dispose();
     _licensePlateController.dispose();
     super.dispose();
   }
@@ -70,15 +74,60 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _vehicleMakeController.text = vehicleDetails['make'] ?? '';
         _vehicleModelController.text = vehicleDetails['model'] ?? '';
         _vehicleYearController.text = vehicleDetails['year']?.toString() ?? '';
-        _vehicleColorController.text = vehicleDetails['color'] ?? '';
         _licensePlateController.text = vehicleDetails['licensePlate'] ?? '';
+        _vehicleColorController.text = vehicleDetails['color'] ?? '';
       }
+      
+      // Load today's stats
+      await _loadTodayStats();
+      
     } catch (e) {
       print('Error loading driver data: $e');
     } finally {
       setState(() {
         _isLoading = false;
       });
+    }
+  }
+
+  Future<void> _loadTodayStats() async {
+    try {
+      final driverId = FirebaseAuth.instance.currentUser?.uid;
+      if (driverId == null) return;
+      
+      // Get today's date range
+      final now = DateTime.now();
+      final todayStart = DateTime(now.year, now.month, now.day);
+      final todayEnd = todayStart.add(const Duration(days: 1));
+      
+      // Query trips for today
+      final tripsQuery = await FirebaseFirestore.instance
+          .collection('trips')
+          .where('driverId', isEqualTo: driverId)
+          .where('status', isEqualTo: 'completed')
+          .where('completionTime', isGreaterThanOrEqualTo: Timestamp.fromDate(todayStart))
+          .where('completionTime', isLessThan: Timestamp.fromDate(todayEnd))
+          .get();
+      
+      double totalEarnings = 0.0;
+      int tripCount = 0;
+      
+      for (var doc in tripsQuery.docs) {
+        final tripData = doc.data();
+        final fare = (tripData['fare'] as num?)?.toDouble() ?? 0.0;
+        totalEarnings += fare;
+        tripCount++;
+      }
+      
+      if (mounted) {
+        setState(() {
+          _todayEarnings = totalEarnings;
+          _todayTrips = tripCount;
+        });
+      }
+      
+    } catch (e) {
+      print('Error loading today stats: $e');
     }
   }
   
@@ -137,6 +186,142 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
   
+  Widget _buildProfileImage() {
+    final profileImageUrl = _driverData['baseFaceImageUrl'] as String?;
+    
+    return Stack(
+      children: [
+        CircleAvatar(
+          radius: 50,
+          backgroundColor: Colors.grey[300],
+          backgroundImage: profileImageUrl != null && profileImageUrl.isNotEmpty
+              ? NetworkImage(profileImageUrl)
+              : null,
+          child: profileImageUrl == null || profileImageUrl.isEmpty
+              ? const Icon(Icons.person, size: 50)
+              : null,
+        ),
+        // Loading overlay
+        if (_isImageLoading && profileImageUrl != null && profileImageUrl.isNotEmpty)
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.3),
+                shape: BoxShape.circle,
+              ),
+              child: const Center(
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildProfileImageWithListener() {
+    final profileImageUrl = _driverData['baseFaceImageUrl'] as String?;
+    
+    if (profileImageUrl == null || profileImageUrl.isEmpty) {
+      return CircleAvatar(
+        radius: 50,
+        backgroundColor: Colors.grey[300],
+        child: const Icon(Icons.person, size: 50),
+      );
+    }
+    
+    return Stack(
+      children: [
+        CircleAvatar(
+          radius: 50,
+          backgroundColor: Colors.grey[300],
+          backgroundImage: NetworkImage(profileImageUrl),
+          onBackgroundImageError: (exception, stackTrace) {
+            print('Error loading profile image: $exception');
+            if (mounted) {
+              setState(() {
+                _isImageLoading = false;
+              });
+            }
+          },
+        ),
+        // Loading overlay
+        if (_isImageLoading)
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.3),
+                shape: BoxShape.circle,
+              ),
+              child: const Center(
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // Alternative approach using Image.network with proper loading handling
+  Widget _buildProfileImageAdvanced() {
+    final profileImageUrl = _driverData['baseFaceImageUrl'] as String?;
+    
+    if (profileImageUrl == null || profileImageUrl.isEmpty) {
+      return CircleAvatar(
+        radius: 50,
+        backgroundColor: Colors.grey[300],
+        child: const Icon(Icons.person, size: 50),
+      );
+    }
+    
+    return SizedBox(
+      width: 100,
+      height: 100,
+      child: ClipOval(
+        child: Image.network(
+          profileImageUrl,
+          fit: BoxFit.cover,
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) {
+              // Image loaded successfully
+              return child;
+            }
+            
+            // Show loading indicator while image is loading
+            return Container(
+              color: Colors.grey[300],
+              child: Center(
+                child: CircularProgressIndicator(
+                  value: loadingProgress.expectedTotalBytes != null
+                      ? loadingProgress.cumulativeBytesLoaded / 
+                        loadingProgress.expectedTotalBytes!
+                      : null,
+                  strokeWidth: 2,
+                ),
+              ),
+            );
+          },
+          errorBuilder: (context, error, stackTrace) {
+            print('Error loading profile image: $error');
+            return Container(
+              color: Colors.grey[300],
+              child: const Icon(
+                Icons.person,
+                size: 50,
+                color: Colors.grey,
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<DriverAuthProvider>(context);
@@ -167,10 +352,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Center(
                     child: Column(
                       children: [
-                        const CircleAvatar(
-                          radius: 50,
-                          child: Icon(Icons.person, size: 50),
-                        ),
+                        _buildProfileImageAdvanced(),
                         const SizedBox(height: 8),
                         Text(
                           _driverData['displayName'] ?? 'Driver',
@@ -230,26 +412,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   
                   const Divider(),
                   
-                  // Stats
+                  // Today's Stats Section
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 8.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    child: Column(
                       children: [
-                        _buildStatItem(
-                          'Trips',
-                          '${_driverData['tripCount'] ?? 0}',
-                          Icons.directions_car,
+                        Text(
+                          'Today\'s Performance',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[700],
+                          ),
                         ),
-                        _buildStatItem(
-                          'Earnings',
-                          '\$${(_driverData['totalEarnings'] ?? 0).toStringAsFixed(2)}',
-                          Icons.attach_money,
-                        ),
-                        _buildStatItem(
-                          'Member Since',
-                          _formatDate(_driverData['createdAt']),
-                          Icons.calendar_today,
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _buildStatItem(
+                              'Today\'s Trips',
+                              '$_todayTrips',
+                              Icons.directions_car,
+                              Colors.blue,
+                            ),
+                            _buildStatItem(
+                              'Today\'s Earnings',
+                              '\$${_todayEarnings.toStringAsFixed(2)}',
+                              Icons.attach_money,
+                              Colors.green,
+                            ),
+                            _buildStatItem(
+                              'Member Since',
+                              _formatDate(_driverData['createdAt']),
+                              Icons.calendar_today,
+                              Colors.orange,
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -323,25 +521,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
   
-  Widget _buildStatItem(String label, String value, IconData icon) {
-    return Column(
-      children: [
-        Icon(icon, color: Colors.blue),
-        const SizedBox(height: 8),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
+  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withOpacity(0.3)),
         ),
-        Text(
-          label,
-          style: TextStyle(
-            color: Colors.grey[600],
-          ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 24),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
   
