@@ -23,8 +23,48 @@ class _TripRequestDialogState extends State<TripRequestDialog> {
   @override
   void initState() {
     super.initState();
-    // Get expiration time from trip data or default to 20 seconds
-    _remainingSeconds = int.tryParse(widget.tripData['expiresIn'] ?? '20') ?? 20;
+    
+     // Calculate remaining time based on when notification was received
+  DateTime notificationTime;
+  try {
+    final timeValue = widget.tripData['notificationTime'];
+    if (timeValue != null) {
+      if (timeValue is String && timeValue.isNotEmpty) {
+        // Try parsing as milliseconds timestamp first
+        final timestamp = int.tryParse(timeValue);
+        if (timestamp != null) {
+          notificationTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+        } else {
+          // Fallback to ISO8601 string parsing
+          notificationTime = DateTime.parse(timeValue);
+        }
+      } else if (timeValue is int) {
+        // Direct integer timestamp
+        notificationTime = DateTime.fromMillisecondsSinceEpoch(timeValue);
+      } else {
+        notificationTime = DateTime.now();
+      }
+    } else {
+      // Fallback to current time if no valid timestamp
+      notificationTime = DateTime.now();
+    }
+  } catch (e) {
+    // If parsing fails, use current time as fallback
+    print('Error parsing notification time: $e');
+    notificationTime = DateTime.now();
+  }
+    final totalDuration = int.tryParse(widget.tripData['expiresIn'] ?? '20') ?? 20;
+    final elapsedSeconds = DateTime.now().difference(notificationTime).inSeconds;
+    
+    _remainingSeconds = (totalDuration - elapsedSeconds).clamp(0, totalDuration);
+    
+    // If already expired, auto-reject immediately
+    if (_remainingSeconds <= 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _rejectTrip();
+      });
+      return;
+    }
     
     // Start countdown timer
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {

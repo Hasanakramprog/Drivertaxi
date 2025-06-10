@@ -330,6 +330,7 @@ void processFcmNotification(Map<String, dynamic> messageData) {
       'duration': int.tryParse(messageData['estimatedDuration'] ?? '0'),
       'expiresIn': messageData['expiresIn'],
       'totalWaitingTime': int.tryParse(messageData['totalWaitingTime'] ?? '0') ?? 0,
+      'notificationTime': messageData['notificationTime'] ?? DateTime.now().toIso8601String(),
     };
     
     // Process stops if present
