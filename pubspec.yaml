@@ -61,6 +61,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   firebase_storage: ^11.7.7
+  package_info_plus: ^8.0.0  # Add this line
 
 dev_dependencies:
   flutter_test:
@@ -72,7 +73,18 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
-
+flutter_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/logo.jpg"  # Use your existing logo
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/images/logo.jpg"
+  windows:
+    generate: true
+    image_path: "assets/images/logo.jpg"
+    icon_size: 48
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 

@@ -1,6 +1,7 @@
 // lib/screens/home_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taxi_driver_app/providers/location_provider.dart';
@@ -12,6 +13,7 @@ import 'package:taxi_driver_app/widgets/driver_map.dart';
 import 'package:taxi_driver_app/widgets/online_toggle.dart';
 import 'package:taxi_driver_app/widgets/trip_request_dialog.dart';
 import 'package:taxi_driver_app/screens/trip_tracker_screen.dart';
+import 'package:taxi_driver_app/screens/about_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -121,45 +123,15 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Taxi Driver'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.history),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const TripHistoryScreen()),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.account_circle),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()),
-              );
-            },
-          ),
-        ],
-      ),
+      appBar: _buildEnhancedAppBar(),
       body: Column(
         children: [
-          _buildActiveTripBanner(), // Add this at the top
+          _buildActiveTripBanner(),
           Expanded(
             child: Stack(
               children: [
                 // Map covering the whole screen
                 const DriverMap(),
-                
-                // Online/Offline toggle at the top
-                const Positioned(
-                  top: 16.0,
-                  left: 16.0,
-                  right: 16.0,
-                  child: OnlineToggle(),
-                ),
                 
                 // Trip info card if there's an active trip
                 Consumer<TripProvider>(
@@ -175,18 +147,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     return const SizedBox.shrink();
                   },
                 ),
+                
+                // Enhanced Earnings FAB
+                Positioned(
+                  left: 16,
+                  bottom: 16,
+                  child: _buildEarningsFAB(),
+                ),
               ],
             ),
-          ),
-          // FAB for earnings
-          FloatingActionButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const EarningsScreen()),
-              );
-            },
-            child: const Icon(Icons.attach_money),
           ),
         ],
       ),
@@ -364,5 +333,403 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     
     return const SizedBox.shrink();
+  }
+  
+  // Add this new method for the enhanced earnings FAB
+  Widget _buildEarningsFAB() {
+    return Consumer<TripProvider>(
+      builder: (context, tripProvider, _) {
+        // Get today's earnings (you might need to implement this in TripProvider)
+        final todayEarnings = tripProvider.todayEarnings ?? 0.0;
+        final tripCount = tripProvider.todayTripCount ?? 0;
+        
+        return GestureDetector(
+          onTap: () {
+            HapticFeedback.mediumImpact();
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const EarningsScreen()),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  Colors.green.shade400,
+                  Colors.green.shade600,
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(25),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.green.withOpacity(0.3),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                  spreadRadius: 1,
+                ),
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.account_balance_wallet,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Today\'s Earnings',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.9),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Text(
+                          '\$${todayEarnings.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        if (tripCount > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.25),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              '$tripCount trips',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.arrow_forward_ios,
+                  color: Colors.white.withOpacity(0.8),
+                  size: 12,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    
+  }
+
+  // Add this new method for the enhanced AppBar
+  PreferredSizeWidget _buildEnhancedAppBar() {
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(kToolbarHeight),
+      child: Consumer2<LocationProvider, TripProvider>(
+        builder: (context, locationProvider, tripProvider, _) {
+          // Dynamic colors based on online status
+          final primaryColor = locationProvider.isOnline ? Colors.green : Colors.red;
+          final secondaryColor = locationProvider.isOnline ? Colors.green.shade700 : Colors.red.shade700;
+          
+          return AppBar(
+            elevation: 0,
+            backgroundColor: Colors.transparent,
+            flexibleSpace: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    primaryColor.shade600,
+                    secondaryColor,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: primaryColor.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+            ),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    locationProvider.isOnline ? Icons.local_taxi : Icons.taxi_alert,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Taxi Driver',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            locationProvider.isOnline ? 'Online' : 'Offline',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.9),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          if (tripProvider.todayTripCount != null && tripProvider.todayTripCount! > 0) ...[
+                            const SizedBox(width: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                '${tripProvider.todayTripCount} trips',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              // Notifications with badge
+              Container(
+                margin: const EdgeInsets.only(right: 8),
+                child: Stack(
+                  children: [
+                    IconButton(
+                      onPressed: () {
+                        HapticFeedback.lightImpact();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Notifications coming soon!'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      },
+                      icon: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.notifications_outlined,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                      tooltip: 'Notifications',
+                    ),
+                    // Notification badge
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              // Trip History
+              Container(
+                margin: const EdgeInsets.only(right: 8),
+                child: IconButton(
+                  onPressed: () {
+                    HapticFeedback.lightImpact();
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const TripHistoryScreen()),
+                    );
+                  },
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.history,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                  tooltip: 'Trip History',
+                ),
+              ),
+              
+              // Profile Menu
+              Container(
+                margin: const EdgeInsets.only(right: 12),
+                child: PopupMenuButton<String>(
+                  onSelected: (value) {
+                    HapticFeedback.lightImpact();
+                    switch (value) {
+                      case 'profile':
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                        );
+                        break;
+                      case 'earnings':
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const EarningsScreen()),
+                        );
+                        break;
+                      case 'settings':
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Settings coming soon!'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                        break;
+                      case 'about':  // Add this case
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const AboutScreen()),
+                        );
+                        break;
+                    }
+                  },
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.account_circle_outlined,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                  tooltip: 'Profile Menu',
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'profile',
+                      child: Row(
+                        children: [
+                          Icon(Icons.person, size: 20),
+                          SizedBox(width: 12),
+                          Text('Profile'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'earnings',
+                      child: Row(
+                        children: [
+                          Icon(Icons.account_balance_wallet, size: 20),
+                          SizedBox(width: 12),
+                          Text('Earnings'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'settings',
+                      child: Row(
+                        children: [
+                          Icon(Icons.settings, size: 20),
+                          SizedBox(width: 12),
+                          Text('Settings'),
+                        ],
+                      ),
+                    ),
+                    const PopupMenuItem(  // Add this menu item
+                      value: 'about',
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 20),
+                          SizedBox(width: 12),
+                          Text('About'),
+                        ],
+                      ),
+                    ),
+                  ],
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 8,
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 }

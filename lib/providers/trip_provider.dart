@@ -49,9 +49,53 @@ class TripProvider with ChangeNotifier {
     notifyListeners();
   }
   
+  double? _todayEarnings;
+  int? _todayTripCount;
+  
+  // Getters
+  double? get todayEarnings => _todayEarnings;
+  int? get todayTripCount => _todayTripCount;
+  
+  // Method to calculate today's earnings (call this when provider initializes)
+  Future<void> _calculateTodayEarnings() async {
+    try {
+      final today = DateTime.now();
+      final startOfDay = DateTime(today.year, today.month, today.day);
+      final endOfDay = startOfDay.add(const Duration(days: 1));
+      
+      final snapshot = await _firestore
+          .collection('trips')
+          .where('driverId', isEqualTo: _auth.currentUser?.uid)
+          .where('status', isEqualTo: 'completed')
+          .where('completionTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+          .where('completionTime', isLessThan: Timestamp.fromDate(endOfDay))
+          .get();
+      
+      double totalEarnings = 0.0;
+      int tripCount = 0;
+      
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final fare = (data['fare'] as num?)?.toDouble() ?? 0.0;
+        totalEarnings += fare;
+        tripCount++;
+      }
+      
+      _todayEarnings = totalEarnings;
+      _todayTripCount = tripCount;
+      notifyListeners();
+    } catch (e) {
+      print('Error calculating today\'s earnings: $e');
+      _todayEarnings = 0.0;
+      _todayTripCount = 0;
+    }
+  }
+  
   // Initialize provider
   Future<void> initialize() async {
     await _checkForCurrentTrip();
+    // ...existing initialization code...
+    await _calculateTodayEarnings();
   }
   
   // Check if driver has an active trip

@@ -9,6 +9,7 @@ import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:taxi_driver_app/services/hotspot_service.dart';
+import 'package:flutter/services.dart'; // Add this import at the top
 // Add these imports at the top
 import 'dart:ui' as ui;
 import 'dart:typed_data';
@@ -41,7 +42,7 @@ class _DriverMapState extends State<DriverMap> {
   
   // Add these variables for hotspots
   List<Map<String, dynamic>> _hotspots = [];
-  bool _showHotspots = true;
+  bool _showHotspots = false;
   bool _isLoadingHotspots = false;
   
   @override
@@ -606,49 +607,252 @@ Future<void> _loadHotspots() async {
                 ),
               ),
             
-            // Custom "My Location" button (only show when loading is complete)
+            // // Custom "My Location" button (only show when loading is complete)
+            // if (!_isMapLoading && !_isLocationLoading && _loadingStatus.isEmpty)
+            //   Positioned(
+            //     right: 16,
+            //     bottom: 100,
+            //     child: FloatingActionButton(
+            //       heroTag: "myLocation",
+            //       mini: true,
+            //       backgroundColor: Colors.white,
+            //       elevation: 4,
+            //       child: Icon(
+            //         Icons.my_location,
+            //         color: locationProvider.currentPosition != null 
+            //             ? Colors.blue 
+            //             : Colors.grey,
+            //       ),
+            //       onPressed: () async {
+            //         await locationProvider.getCurrentLocationAndNavigate();
+            //       },
+            //     ),
+            //   ),
+            
+            // Control Panel - All action buttons grouped together
             if (!_isMapLoading && !_isLocationLoading && _loadingStatus.isEmpty)
               Positioned(
                 right: 16,
                 bottom: 100,
-                child: FloatingActionButton(
-                  heroTag: "myLocation",
-                  mini: true,
-                  backgroundColor: Colors.white,
-                  elevation: 4,
-                  child: Icon(
-                    Icons.my_location,
-                    color: locationProvider.currentPosition != null 
-                        ? Colors.blue 
-                        : Colors.grey,
-                  ),
-                  onPressed: () async {
-                    await locationProvider.getCurrentLocationAndNavigate();
-                  },
-                ),
-              ),
-            
-            // Online/Offline toggle button (only show when loading is complete)
-            if (!_isMapLoading && !_isLocationLoading && _loadingStatus.isEmpty)
-              Positioned(
-                right: 16,
-                bottom: 160,
-                child: FloatingActionButton(
-                  heroTag: "onlineToggle",
-                  mini: true,
-                  backgroundColor: locationProvider.isOnline ? Colors.green : Colors.red,
-                  elevation: 4,
-                  child: Icon(
-                    locationProvider.isOnline ? Icons.pause : Icons.play_arrow,
-                    color: Colors.white,
-                  ),
-                  onPressed: () async {
-                    if (locationProvider.isOnline) {
-                      await locationProvider.goOffline();
-                    } else {
-                      await locationProvider.goOnline(context);
-                    }
-                  },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Online/Offline Status Card
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: locationProvider.isOnline ? Colors.green.shade50 : Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: locationProvider.isOnline ? Colors.green : Colors.red,
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: locationProvider.isOnline ? Colors.green : Colors.red,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            locationProvider.isOnline ? 'ONLINE' : 'OFFLINE',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: locationProvider.isOnline ? Colors.green.shade700 : Colors.red.shade700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    // Main Control Buttons
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(25),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.15),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Online/Offline Toggle Button
+                          FloatingActionButton(
+                            heroTag: "onlineToggle",
+                            backgroundColor: locationProvider.isOnline ? Colors.green : Colors.red,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            onPressed: () async {
+                              HapticFeedback.mediumImpact(); // Add haptic feedback
+                              if (locationProvider.isOnline) {
+                                await locationProvider.goOffline();
+                              } else {
+                                await locationProvider.goOnline(context);
+                              }
+                            },
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 300),
+                              child: Icon(
+                                locationProvider.isOnline ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                                key: ValueKey(locationProvider.isOnline),
+                                size: 28,
+                              ),
+                            ),
+                          ),
+                          
+                          const SizedBox(height: 8),
+                          
+                          // Hotspots Toggle Button
+                          FloatingActionButton(
+                            heroTag: "hotspotsToggle",
+                            mini: true,
+                            backgroundColor: _showHotspots ? Colors.orange : Colors.grey.shade400,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            onPressed: () {
+                              HapticFeedback.lightImpact();
+                              setState(() {
+                                _showHotspots = !_showHotspots;
+                                _updateHotspotCircles();
+                                if (_showHotspots) {
+                                  _zoomToShowAllHotspots();
+                                }
+                              });
+                            },
+                            child: Stack(
+                              children: [
+                                Icon(
+                                  Icons.local_fire_department,
+                                  size: 20,
+                                ),
+                                if (_hotspots.isNotEmpty)
+                                  Positioned(
+                                    right: 0,
+                                    top: 0,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      constraints: const BoxConstraints(
+                                        minWidth: 12,
+                                        minHeight: 12,
+                                      ),
+                                      child: Text(
+                                        '${_hotspots.length}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 8,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          
+                          const SizedBox(height: 8),
+                          
+                          // Refresh Hotspots Button
+                          FloatingActionButton(
+                            heroTag: "refreshHotspots",
+                            mini: true,
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            onPressed: _isLoadingHotspots ? null : () {
+                              HapticFeedback.lightImpact();
+                              _loadHotspots();
+                            },
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 300),
+                              child: _isLoadingHotspots
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.refresh, size: 20),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    // Quick Stats Panel (Optional)
+                    if (_hotspots.isNotEmpty)
+                      Container(
+                        margin: const EdgeInsets.only(top: 12),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.95),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.local_fire_department, size: 12, color: Colors.orange),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${_hotspots.length} zones',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey[700],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (_showHotspots)
+                              Text(
+                                'Visible',
+                                style: TextStyle(
+                                  fontSize: 8,
+                                  color: Colors.green[600],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
               ),
             
@@ -686,55 +890,6 @@ Future<void> _loadHotspots() async {
                 ),
               ),
             
-            // Hotspot toggle button
-            if (!_isMapLoading && !_isLocationLoading && _loadingStatus.isEmpty)
-              Positioned(
-                right: 16,
-                bottom: 220,
-                child: FloatingActionButton(
-                  heroTag: "hotspotsToggle",
-                  mini: true,
-                  backgroundColor: _showHotspots ? Colors.red : Colors.grey,
-                  elevation: 4,
-                  child: Icon(
-                    _showHotspots ? Icons.visibility : Icons.visibility_off,
-                    color: Colors.white,
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      _showHotspots = !_showHotspots;
-                      _updateHotspotCircles();
-                      if (_showHotspots) {
-                        _zoomToShowAllHotspots(); // Zoom to show all hotspots
-                      }
-                    });
-                  },
-                ),
-              ),
-            
-            // Refresh hotspots button
-            if (!_isMapLoading && !_isLocationLoading && _loadingStatus.isEmpty)
-              Positioned(
-                right: 76,
-                bottom: 220,
-                child: FloatingActionButton(
-                  heroTag: "refreshHotspots",
-                  mini: true,
-                  backgroundColor: Colors.blue,
-                  elevation: 4,
-                  child: _isLoadingHotspots
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : const Icon(Icons.refresh, color: Colors.white),
-                  onPressed: _isLoadingHotspots ? null : _loadHotspots,
-                ),
-              ),
           ],
         );
       },
