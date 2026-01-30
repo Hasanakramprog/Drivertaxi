@@ -11,6 +11,9 @@ import 'package:taxi_driver_app/services/face_verification_service.dart';
 import 'package:taxi_driver_app/providers/trip_provider.dart';
 import 'dart:async'; // Add this import
 
+// FEATURE FLAGS
+const bool ENABLE_FACE_VERIFICATION = false; // Set to true to enable face verification
+
 class AuthWrapper extends StatefulWidget {
   final String? initialTripId;
   
@@ -57,9 +60,13 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
     
     switch (state) {
       case AppLifecycleState.resumed:
-        // App came to foreground, check verification
-        print('App resumed, checking face verification status');
-        _checkFaceVerificationStatus();
+        // App came to foreground, check verification (if enabled)
+        if (ENABLE_FACE_VERIFICATION) {
+          print('App resumed, checking face verification status');
+          _checkFaceVerificationStatus();
+        } else {
+          print('App resumed, face verification disabled');
+        }
         break;
       case AppLifecycleState.paused:
         // App went to background
@@ -79,6 +86,12 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   
   // Start periodic timer to check verification status
   void _startPeriodicVerificationCheck() {
+    // Check feature flag first
+    if (!ENABLE_FACE_VERIFICATION) {
+      print('Face verification periodic check disabled via feature flag');
+      return;
+    }
+    
     // Check every 30 minutes
     _verificationTimer = Timer.periodic(const Duration(minutes: 30), (timer) {
       print('Periodic face verification check triggered');
@@ -121,6 +134,12 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   }
   
   Future<void> _checkFaceVerificationStatus() async {
+    // Check feature flag first
+    if (!ENABLE_FACE_VERIFICATION) {
+      print('Face verification is disabled via feature flag');
+      return;
+    }
+    
     if (!mounted) return;
     
     final user = FirebaseAuth.instance.currentUser;

@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:location/location.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class LocationProvider with ChangeNotifier {
@@ -12,17 +12,16 @@ class LocationProvider with ChangeNotifier {
 
   bool _isOnline = false;
   bool _permissionGranted = false;
-  Location _location = Location();
-  StreamSubscription? _locationSubscription;
+  StreamSubscription<Position>? _locationSubscription;
   
-  // Add this to store the current position
-  LocationData? _currentPosition;
+  // Changed from LocationData to Position
+  Position? _currentPosition;
   GoogleMapController? _mapController; // Add this to store map controller
 
   // Getters
   bool get isOnline => _isOnline;
   bool get hasPermission => _permissionGranted;
-  LocationData? get currentPosition => _currentPosition;
+  Position? get currentPosition => _currentPosition;
 
   // Constructor to initialize
   LocationProvider() {
@@ -31,21 +30,49 @@ class LocationProvider with ChangeNotifier {
 
   // Initialize location services
   Future<void> initialize() async {
+    print('🗺️ Initializing LocationProvider...');
     await _checkPermission();
     if (_permissionGranted) {
-      // Get initial position and move to it
-      await _getCurrentLocationAndNavigate();
+      print('🗺️ Permission granted, getting initial location...');
+      // Get initial position in the background to avoid blocking
+      _getCurrentLocationAndNavigate().then((_) {
+        print('🗺️ Initial location retrieval completed');
+      }).catchError((error) {
+        print('🗺️ Error during initial location retrieval: $error');
+      });
+    } else {
+      print('🗺️ Location permission not granted');
     }
   }
 
   // Get current location and automatically navigate to it
   Future<void> _getCurrentLocationAndNavigate() async {
     try {
-      print('Getting current location...');
-      _currentPosition = await _location.getLocation();
+      print('🗺️ Getting current location with geolocator...');
+      
+      // Check permission first
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          print('🗺️ Location permissions denied');
+          return;
+        }
+      }
+      
+      if (permission == LocationPermission.deniedForever) {
+        print('🗺️ Location permissions permanently denied');
+        return;
+      }
+      
+      // Get current position with timeout
+      _currentPosition = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
+      );
       
       if (_currentPosition != null) {
-        print('Current location obtained: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}');
+        print('🗺️ Current location obtained: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}');
         
         // If map controller is available, animate to current position
         if (_mapController != null) {
@@ -54,8 +81,34 @@ class LocationProvider with ChangeNotifier {
         
         notifyListeners();
       }
+    } on TimeoutException catch (e) {
+      print('🗺️ Location timeout: $e - trying last known position...');
+      await _tryLastKnownPosition();
+    } on LocationServiceDisabledException {
+      print('🗺️ Location services are disabled');
+    } on PermissionDeniedException {
+      print('🗺️ Location permissions denied');
     } catch (e) {
-      print('Error getting initial location: $e');
+      print('🗺️ Error getting initial location: $e');
+      await _tryLastKnownPosition();
+    }
+  }
+  
+  // Helper method to get last known position
+  Future<void> _tryLastKnownPosition() async {
+    try {
+      _currentPosition = await Geolocator.getLastKnownPosition();
+      if (_currentPosition != null) {
+        print('🗺️ Using last known position: ${_currentPosition!.latitude}, ${_currentPosition!.longitude}');
+        if (_mapController != null) {
+          await _animateToCurrentPosition();
+        }
+        notifyListeners();
+      } else {
+        print('🗺️ No last known position available');
+      }
+    } catch (e) {
+      print('🗺️ Could not get last known position: $e');
     }
   }
 
@@ -75,30 +128,34 @@ class LocationProvider with ChangeNotifier {
       final latitude = _currentPosition!.latitude;
       final longitude = _currentPosition!.longitude;
       
-      if (latitude != null && longitude != null) {
-        try {
-          await _mapController!.animateCamera(
-            CameraUpdate.newCameraPosition(
-              CameraPosition(
-                target: LatLng(latitude, longitude),
-                zoom: 16.0, // Adjust zoom level as needed
-                bearing: _currentPosition!.heading ?? 0.0,
-              ),
+      try {
+        await _mapController!.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: LatLng(latitude, longitude),
+              zoom: 16.0, // Adjust zoom level as needed
+              bearing: _currentPosition!.heading,
             ),
-          );
-          print('Camera animated to current position');
-        } catch (e) {
-          print('Error animating camera: $e');
-        }
+          ),
+        );
+        print('🗺️ Camera animated to current position');
+      } catch (e) {
+        print('🗺️ Error animating camera: $e');
       }
     }
   }
 
   // Public method to manually get current location and navigate
   Future<void> getCurrentLocationAndNavigate() async {
+    print('🗺️ Getting current location and navigating...');
+    
     if (!_permissionGranted) {
+      print('🗺️ No permission, checking...');
       await _checkPermission();
-      if (!_permissionGranted) return;
+      if (!_permissionGranted) {
+        print('🗺️ Permission denied');
+        return;
+      }
     }
     
     await _getCurrentLocationAndNavigate();
@@ -106,48 +163,37 @@ class LocationProvider with ChangeNotifier {
 
   // Check and request location permission
   Future<void> _checkPermission() async {
-    bool serviceEnabled;
-    PermissionStatus foregroundPermissionStatus;
-
-    // Check if location service is enabled
-    serviceEnabled = await _location.serviceEnabled();
+    print('🗺️ Checking location permissions...');
+    
+    // Check if location services are enabled
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      serviceEnabled = await _location.requestService();
-      if (!serviceEnabled) {
+      print('🗺️ Location services are disabled');
+      _permissionGranted = false;
+      notifyListeners();
+      return;
+    }
+
+    // Check location permission
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        print('🗺️ Location permissions are denied');
         _permissionGranted = false;
         notifyListeners();
         return;
       }
     }
-
-    // Check foreground location permission
-    foregroundPermissionStatus = await _location.hasPermission();
-    if (foregroundPermissionStatus == PermissionStatus.denied) {
-      foregroundPermissionStatus = await _location.requestPermission();
-      if (foregroundPermissionStatus != PermissionStatus.granted) {
-        _permissionGranted = false;
-        notifyListeners();
-        return;
-      }
+    
+    if (permission == LocationPermission.deniedForever) {
+      print('🗺️ Location permissions are permanently denied');
+      _permissionGranted = false;
+      notifyListeners();
+      return;
     }
 
-    // Try to enable background mode
-    try {
-      bool backgroundEnabled = await _location.enableBackgroundMode(enable: true);
-      if (!backgroundEnabled) {
-        print('Background location mode could not be enabled');
-      }
-    } catch (e) {
-      print('Error enabling background mode: $e');
-    }
-
-    // Set accuracy to high
-    _location.changeSettings(
-      accuracy: LocationAccuracy.high,
-      interval: 5000,
-      distanceFilter: 5,
-    );
-
+    print('🗺️ Location permission granted');
     _permissionGranted = true;
     notifyListeners();
   }
@@ -169,12 +215,22 @@ class LocationProvider with ChangeNotifier {
         'isAvailable': true
       });
 
-      // Start location tracking
-      _locationSubscription = _location.onLocationChanged.listen((locationData) {
-        _currentPosition = locationData;
-        _updateDriverLocation(locationData);
-        notifyListeners();
-      });
+      // Start location tracking with Geolocator
+      _locationSubscription = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 10, // Update every 10 meters
+        ),
+      ).listen(
+        (Position position) {
+          _currentPosition = position;
+          _updateDriverLocation(position);
+          notifyListeners();
+        },
+        onError: (e) {
+          print('🗺️ Location stream error: $e');
+        },
+      );
 
       _isOnline = true;
       notifyListeners();
@@ -182,7 +238,7 @@ class LocationProvider with ChangeNotifier {
       // Get current location when going online
       await _getCurrentLocationAndNavigate();
     } catch (e) {
-      print('Error going online: $e');
+      print('🗺️ Error going online: $e');
     }
   }
 
@@ -208,27 +264,21 @@ class LocationProvider with ChangeNotifier {
   }
 
   // Update driver location in Firestore
-  Future<void> _updateDriverLocation(LocationData locationData) async {
+  Future<void> _updateDriverLocation(Position position) async {
     if (_auth.currentUser == null) return;
-    
-    final latitude = locationData.latitude;
-    final longitude = locationData.longitude;
-    
-    if (latitude == null || longitude == null) {
-      print('Location data is incomplete');
-      return;
-    }
 
     try {
-      final GeoPoint location = GeoPoint(latitude, longitude);
+      final GeoPoint location = GeoPoint(position.latitude, position.longitude);
 
       await _firestore.collection('drivers').doc(_auth.currentUser!.uid).update({
         'location': location,
-        'heading': locationData.heading ?? 0.0,
+        'heading': position.heading,
+        'speed': position.speed,
+        'accuracy': position.accuracy,
         'lastLocationUpdate': FieldValue.serverTimestamp()
       });
     } catch (e) {
-      print('Error updating location: $e');
+      print('🗺️ Error updating location: $e');
     }
   }
   
@@ -288,12 +338,10 @@ class LocationProvider with ChangeNotifier {
   }
 
   Future<void> _openAppSettings() async {
-    await _location.requestService();
-    // This often triggers the permission dialog or takes user to settings
     try {
-      await _location.requestPermission();
+      await Geolocator.openAppSettings();
     } catch (e) {
-      print("Error requesting permission: $e");
+      print("🗺️ Error opening app settings: $e");
     }
   }
 }

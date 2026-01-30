@@ -228,12 +228,21 @@ Future<bool> acceptTrip(String tripId) async {
     if (_currentTripId == null) return false;
     
     try {
+      // Get trip data before completing to calculate earnings
+      final tripData = _currentTripData;
+      
       await _firestore.collection('trips').doc(_currentTripId).update({
         'status': 'completed',
         'completed': true,
         'completionTime': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      
+      // Update today's earnings if fare is available
+      if (tripData != null && tripData['fare'] != null) {
+        final fare = (tripData['fare'] as num).toDouble();
+        _updateTodayEarnings(fare);
+      }
       
       // Clear current trip
       String completedTripId = _currentTripId!;
@@ -257,11 +266,8 @@ Future<bool> acceptTrip(String tripId) async {
       await prefs.remove('active_trip_id');
     
       // Clean up stored stop progress
-      if (_currentTripId != null) {
-        await prefs.remove('stop_index_${_currentTripId}');
-        await prefs.remove('all_stops_completed_${_currentTripId}');
-        await prefs.remove('active_trip_id');
-      }
+      await prefs.remove('stop_index_${completedTripId}');
+      await prefs.remove('all_stops_completed_${completedTripId}');
       
       // Reset in memory
       _currentStopIndex = -1;
@@ -348,81 +354,201 @@ void removeTripListener(Function callback) {
       print('Error processing trip request: $e');
     }
   }
-    void rejectTrip(String tripId) {
-    // Implement your logic to reject the trip
-    // This should call your backend API
-    print('Rejecting trip: $tripId');
+    Future<bool> rejectTrip(String tripId) async {
+    if (_auth.currentUser == null) return false;
+    
+    try {
+      print('Rejecting trip: $tripId');
+      
+      // Update trip status in Firestore
+      await _firestore.collection('trips').doc(tripId).update({
+        'status': 'cancelled',
+        'rejectedBy': _auth.currentUser!.uid,
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'rejectionReason': 'Driver Declined',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      
+      // Update driver availability
+      if (_auth.currentUser != null) {
+        await _firestore.collection('drivers').doc(_auth.currentUser!.uid).update({
+          'isAvailable': true,
+          'currentTripId': null,
+          'lastRejectionAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+      
+      // Clear current trip data if this was the active trip
+      if (_currentTripId == tripId) {
+        _currentTripId = null;
+        _currentTripData = null;
+        await _tripSubscription?.cancel();
+        _tripSubscription = null;
+        
+        // Clear stored trip data
+        SharedPreferences prefs = await SharedPreferences.getInstance();
+        await prefs.remove('active_trip_id');
+        await prefs.remove('stop_index_${tripId}');
+        await prefs.remove('all_stops_completed_${tripId}');
+        
+        // Reset stop progress
+        _currentStopIndex = -1;
+        _hasCompletedAllStops = false;
+      }
+      
+      print('Trip $tripId rejected successfully');
+      notifyListeners();
+      return true;
+      
+    } catch (e) {
+      print('Error rejecting trip: $e');
+      return false;
+    }
   }
   
-// Method to process FCM notifications
-void processFcmNotification(Map<String, dynamic> messageData) {
-  // Check if it's a trip request notification
-  if (messageData['notificationType'] == 'tripRequest') {
-    // Initialize base trip data
-    final processedData = {
-      'tripId': messageData['tripId'],
-      'pickup': {
-        'address': messageData['pickupAddress'],
-        'latitude': double.tryParse(messageData['pickupLatitude'] ?? '0'),
-        'longitude': double.tryParse(messageData['pickupLongitude'] ?? '0'),
-      },
-      'dropoff': {
-        'address': messageData['dropoffAddress'],
-      },
-      'fare': double.tryParse(messageData['fare'] ?? '0'),
-      'distance': double.tryParse(messageData['distance'] ?? '0'),
-      'duration': int.tryParse(messageData['estimatedDuration'] ?? '0'),
-      'expiresIn': messageData['expiresIn'],
-      'totalWaitingTime': int.tryParse(messageData['totalWaitingTime'] ?? '0') ?? 0,
-      'notificationTime': messageData['notificationTime'] ?? DateTime.now().toIso8601String(),
-    };
+  // Reject trip with specific reason
+  Future<bool> rejectTripWithReason(String tripId, String reason) async {
+    if (_auth.currentUser == null) return false;
     
-    // Process stops if present
-    if (messageData['hasStops'] == 'true') {
-      final stopsCount = int.tryParse(messageData['stopsCount'] ?? '0') ?? 0;
-      final List<Map<String, dynamic>> stops = [];
+    try {
+      print('Rejecting trip: $tripId with reason: $reason');
       
-      // Process each stop (up to 5 as per backend limitation)
-      final maxStops = stopsCount > 5 ? 5 : stopsCount;
-      for (int i = 0; i < maxStops; i++) {
-        final stopIndex = i + 1; // Backend uses 1-based indexing for stops
+      // Update trip status in Firestore with detailed rejection info
+      await _firestore.collection('trips').doc(tripId).update({
+        'status': 'driver_rejected',
+        'rejectedBy': _auth.currentUser!.uid,
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'rejectionReason': reason,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      
+      // Update driver stats for analytics
+      await _firestore.collection('drivers').doc(_auth.currentUser!.uid).update({
+        'isAvailable': true,
+        'currentTripId': null,
+        'lastRejectionAt': FieldValue.serverTimestamp(),
+        'lastRejectionReason': reason,
+        'totalRejections': FieldValue.increment(1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      
+      // Clear current trip data if this was the active trip
+      if (_currentTripId == tripId) {
+        _currentTripId = null;
+        _currentTripData = null;
+        await _tripSubscription?.cancel();
+        _tripSubscription = null;
         
-        // Only add if address exists
-        if (messageData['stop${stopIndex}Address'] != null) {
-          stops.add({
-            'address': messageData['stop${stopIndex}Address'],
-            'latitude': double.tryParse(messageData['stop${stopIndex}Latitude'] ?? '0') ?? 0.0,
-            'longitude': double.tryParse(messageData['stop${stopIndex}Longitude'] ?? '0') ?? 0.0,
-            'waitingTime': int.tryParse(messageData['stop${stopIndex}WaitingTime'] ?? '0') ?? 0,
-            'index': i, // 0-based index for app usage
-          });
-        }
+        // Clear stored trip data
+        SharedPreferences prefs = await SharedPreferences.getInstance();
+        await prefs.remove('active_trip_id');
+        await prefs.remove('stop_index_${tripId}');
+        await prefs.remove('all_stops_completed_${tripId}');
+        
+        // Reset stop progress
+        _currentStopIndex = -1;
+        _hasCompletedAllStops = false;
       }
       
-      // Add stops data to processed data
-      processedData['stops'] = stops;
-      processedData['hasStops'] = true;
-      processedData['stopsCount'] = stopsCount;
+      print('Trip $tripId rejected successfully with reason: $reason');
+      notifyListeners();
+      return true;
       
-      // Check if there are additional stops not included in the message
-      if (messageData['additionalStops'] != null) {
-        processedData['additionalStops'] = 
-            int.tryParse(messageData['additionalStops'] ?? '0') ?? 0;
+    } catch (e) {
+      print('Error rejecting trip with reason: $e');
+      return false;
+    }
+  }
+
+  // Helper method to get common rejection reasons
+  static List<String> getRejectionReasons() {
+    return [
+      'too_far',
+      'going_offline',
+      'personal_emergency',
+      'vehicle_issue',
+      'traffic_conditions',
+      'other',
+    ];
+  }
+
+  // Update earnings when a trip is completed
+  void _updateTodayEarnings(double fare) {
+    _todayEarnings = (_todayEarnings ?? 0.0) + fare;
+    _todayTripCount = (_todayTripCount ?? 0) + 1;
+    notifyListeners();
+  }
+
+  // Method to process FCM notifications
+  void processFcmNotification(Map<String, dynamic> messageData) {
+    // Check if it's a trip request notification
+    if (messageData['notificationType'] == 'tripRequest') {
+      // Initialize base trip data
+      final processedData = {
+        'tripId': messageData['tripId'],
+        'pickup': {
+          'address': messageData['pickupAddress'],
+          'latitude': double.tryParse(messageData['pickupLatitude'] ?? '0'),
+          'longitude': double.tryParse(messageData['pickupLongitude'] ?? '0'),
+        },
+        'dropoff': {
+          'address': messageData['dropoffAddress'],
+        },
+        'fare': double.tryParse(messageData['fare'] ?? '0'),
+        'distance': double.tryParse(messageData['distance'] ?? '0'),
+        'duration': int.tryParse(messageData['estimatedDuration'] ?? '0'),
+        'expiresIn': messageData['expiresIn'],
+        'totalWaitingTime': int.tryParse(messageData['totalWaitingTime'] ?? '0') ?? 0,
+        'notificationTime': messageData['notificationTime'] ?? DateTime.now().toIso8601String(),
+      };
+      
+      // Process stops if present
+      if (messageData['hasStops'] == 'true') {
+        final stopsCount = int.tryParse(messageData['stopsCount'] ?? '0') ?? 0;
+        final List<Map<String, dynamic>> stops = [];
+        
+        // Process each stop (up to 5 as per backend limitation)
+        final maxStops = stopsCount > 5 ? 5 : stopsCount;
+        for (int i = 0; i < maxStops; i++) {
+          final stopIndex = i + 1; // Backend uses 1-based indexing for stops
+          
+          // Only add if address exists
+          if (messageData['stop${stopIndex}Address'] != null) {
+            stops.add({
+              'address': messageData['stop${stopIndex}Address'],
+              'latitude': double.tryParse(messageData['stop${stopIndex}Latitude'] ?? '0') ?? 0.0,
+              'longitude': double.tryParse(messageData['stop${stopIndex}Longitude'] ?? '0') ?? 0.0,
+              'waitingTime': int.tryParse(messageData['stop${stopIndex}WaitingTime'] ?? '0') ?? 0,
+              'index': i, // 0-based index for app usage
+            });
+          }
+        }
+        
+        // Add stops data to processed data
+        processedData['stops'] = stops;
+        processedData['hasStops'] = true;
+        processedData['stopsCount'] = stopsCount;
+        
+        // Check if there are additional stops not included in the message
+        if (messageData['additionalStops'] != null) {
+          processedData['additionalStops'] = 
+              int.tryParse(messageData['additionalStops'] ?? '0') ?? 0;
+        } else {
+          processedData['additionalStops'] = 0;
+        }
       } else {
+        // No stops
+        processedData['hasStops'] = false;
+        processedData['stops'] = <Map<String, dynamic>>[];
+        processedData['stopsCount'] = 0;
         processedData['additionalStops'] = 0;
       }
-    } else {
-      // No stops
-      processedData['hasStops'] = false;
-      processedData['stops'] = <Map<String, dynamic>>[];
-      processedData['stopsCount'] = 0;
-      processedData['additionalStops'] = 0;
+      
+      // Add the processed data to the trip requests stream
+      _tripRequestController.add(processedData);
     }
-    
-    // Add the processed data to the trip requests stream
-    _tripRequestController.add(processedData);
   }
-}
   
   @override
   void dispose() {

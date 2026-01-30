@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:taxi_driver_app/providers/auth_provider.dart';
+import 'package:taxi_driver_app/providers/location_provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:taxi_driver_app/screens/authentication/login_screen.dart'; // Add this import
@@ -488,6 +489,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         
                         if (shouldLogout) {
                           try {
+                            // Get location provider to set driver offline
+                            final locationProvider = Provider.of<LocationProvider>(context, listen: false);
+                            
+                            // Set driver offline first if currently online
+                            if (locationProvider.isOnline) {
+                              print('Setting driver offline before logout...');
+                              await locationProvider.goOffline();
+                            }
+                            
+                            // Then logout
                             await authProvider.logout();
                             
                             // Navigate to login screen and remove all previous routes

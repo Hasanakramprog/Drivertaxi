@@ -53,7 +53,8 @@ class _TripRequestDialogState extends State<TripRequestDialog> {
     print('Error parsing notification time: $e');
     notificationTime = DateTime.now();
   }
-    final totalDuration = int.tryParse(widget.tripData['expiresIn'] ?? '20') ?? 20;
+    // final totalDuration = int.tryParse(widget.tripData['expiresIn'] ?? '20') ?? 20;
+    final totalDuration = 60;
     final elapsedSeconds = DateTime.now().difference(notificationTime).inSeconds;
     
     _remainingSeconds = (totalDuration - elapsedSeconds).clamp(0, totalDuration);

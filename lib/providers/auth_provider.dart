@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // Authentication status enum
 enum AuthStatus {
@@ -316,6 +317,9 @@ class DriverAuthProvider with ChangeNotifier {
         password: password,
       );
       
+      // Handle FCM token after successful login
+      await _handleFCMTokenAfterLogin();
+      
       // Auth state changes listener will handle the rest
     } catch (e) {
       _status = AuthStatus.unauthenticated;
@@ -323,17 +327,107 @@ class DriverAuthProvider with ChangeNotifier {
       rethrow;
     }
   }
-  
+
+  // Add this method to handle FCM token after login
+  Future<void> _handleFCMTokenAfterLogin() async {
+    try {
+      print('Handling FCM token after login...');
+      
+      // Get fresh FCM token
+      final messaging = FirebaseMessaging.instance;
+      final token = await messaging.getToken();
+      
+      if (token != null && _user != null) {
+        print('Updating FCM token for logged in user: ${_user!.uid}');
+        
+        // Update token in Firestore
+        await _firestore
+            .collection('drivers')
+            .doc(_user!.uid)
+            .set({
+          'fcmToken': token,
+          'lastTokenUpdate': FieldValue.serverTimestamp(),
+          'tokenUpdatedAt': DateTime.now().toIso8601String(),
+        }, SetOptions(merge: true));
+        
+        // Store locally
+        SharedPreferences prefs = await SharedPreferences.getInstance();
+        await prefs.setString('current_fcm_token', token);
+        await prefs.remove('pending_fcm_token'); // Clear any pending token
+        
+        print('FCM token successfully updated after login');
+      }
+      
+      // Also check for any pending token from before login
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      final pendingToken = prefs.getString('pending_fcm_token');
+      if (pendingToken != null && pendingToken.isNotEmpty && pendingToken != token) {
+        print('Found different pending FCM token, updating...');
+        
+        if (_user != null) {
+          await _firestore
+              .collection('drivers')
+              .doc(_user!.uid)
+              .set({
+            'fcmToken': pendingToken,
+            'lastTokenUpdate': FieldValue.serverTimestamp(),
+            'tokenUpdatedAt': DateTime.now().toIso8601String(),
+          }, SetOptions(merge: true));
+          
+          await prefs.setString('current_fcm_token', pendingToken);
+          await prefs.remove('pending_fcm_token');
+        }
+      }
+    } catch (e) {
+      print('Error handling FCM token after login: $e');
+    }
+  }
+
   Future<void> logout() async {
     try {
       _status = AuthStatus.loading;
       notifyListeners();
+      
+      // Set driver offline before signing out
+      await _setDriverOfflineOnLogout();
       
       await _auth.signOut();
       
       // Auth state changes listener will handle the rest
     } catch (e) {
       rethrow;
+    }
+  }
+
+  // Add this method to handle setting driver offline during logout
+  Future<void> _setDriverOfflineOnLogout() async {
+    try {
+      if (_user != null) {
+        print('Setting driver offline before logout...');
+        
+        // Update driver status in Firestore
+        await _firestore.collection('drivers').doc(_user!.uid).set({
+          'isOnline': false,
+          'isAvailable': false,
+          'lastOfflineAt': FieldValue.serverTimestamp(),
+          'offlineReason': 'logout',
+          'fcmToken': null, // Clear FCM token on logout for security
+          'lastLocation': null, // Clear location data for privacy
+        }, SetOptions(merge: true));
+        
+        // Clear local FCM token storage
+        SharedPreferences prefs = await SharedPreferences.getInstance();
+        await prefs.remove('current_fcm_token');
+        await prefs.remove('pending_fcm_token');
+        
+        // Clear any active trip data
+        await prefs.remove('active_trip_id');
+        
+        print('Driver set offline successfully');
+      }
+    } catch (e) {
+      print('Error setting driver offline during logout: $e');
+      // Continue with logout even if this fails
     }
   }
 
