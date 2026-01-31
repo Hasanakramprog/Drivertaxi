@@ -12,19 +12,23 @@ class EarningsScreen extends StatefulWidget {
   State<EarningsScreen> createState() => _EarningsScreenState();
 }
 
-class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProviderStateMixin {
+class _EarningsScreenState extends State<EarningsScreen>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  
+
   // Date formatters
   final DateFormat _dateFormat = DateFormat('MMM d');
   final DateFormat _timeFormat = DateFormat('h:mm a');
-  final NumberFormat _currencyFormat = NumberFormat.currency(symbol: '\$', decimalDigits: 2);
-  
+  final NumberFormat _currencyFormat = NumberFormat.currency(
+    symbol: '\$',
+    decimalDigits: 2,
+  );
+
   // Cached earnings data
   Map<String, EarningsSummary> _earningsCache = {};
-  
+
   // Loading states
   bool _loadingToday = true;
   bool _loadingWeek = true;
@@ -34,7 +38,7 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    
+
     // Load data for each period
     _loadEarnings('today');
     _loadEarnings('week');
@@ -47,33 +51,38 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
     super.dispose();
   }
 
-
-
   // Load earnings data for a specific period
   Future<void> _loadEarnings(String period) async {
     if (_auth.currentUser == null) return;
-    
+
     setState(() {
       switch (period) {
-        case 'today': _loadingToday = true; break;
-        case 'week': _loadingWeek = true; break;
-        case 'month': _loadingMonth = true; break;
+        case 'today':
+          _loadingToday = true;
+          break;
+        case 'week':
+          _loadingWeek = true;
+          break;
+        case 'month':
+          _loadingMonth = true;
+          break;
       }
     });
-    
+
     try {
       DateTime startDate = _getPeriodStartDate(period);
       final startTimestamp = Timestamp.fromDate(startDate);
-      
+
       // Query Firestore for completed trips in the period
-      final querySnapshot = await _firestore
-          .collection('trips')
-          .where('driverId', isEqualTo: _auth.currentUser!.uid)
-          .where('status', isEqualTo: 'completed')
-          .where('completionTime', isGreaterThanOrEqualTo: startTimestamp)
-          .orderBy('completionTime', descending: true)
-          .get();
-      
+      final querySnapshot =
+          await _firestore
+              .collection('trips')
+              .where('driverId', isEqualTo: _auth.currentUser!.uid)
+              .where('status', isEqualTo: 'completed')
+              .where('completionTime', isGreaterThanOrEqualTo: startTimestamp)
+              .orderBy('completionTime', descending: true)
+              .get();
+
       // Calculate total earnings
       double totalEarnings = 0;
       for (var doc in querySnapshot.docs) {
@@ -87,23 +96,28 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
           }
         }
       }
-      
+
       // Store in cache
       _earningsCache[period] = EarningsSummary(
         totalEarnings: totalEarnings,
         tripCount: querySnapshot.docs.length,
         trips: querySnapshot.docs,
       );
-      
     } catch (e) {
       print('Error loading $period earnings: $e');
     } finally {
       // Update loading state
       setState(() {
         switch (period) {
-          case 'today': _loadingToday = false; break;
-          case 'week': _loadingWeek = false; break;
-          case 'month': _loadingMonth = false; break;
+          case 'today':
+            _loadingToday = false;
+            break;
+          case 'week':
+            _loadingWeek = false;
+            break;
+          case 'month':
+            _loadingMonth = false;
+            break;
         }
       });
     }
@@ -113,7 +127,7 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
   DateTime _getPeriodStartDate(String period) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    
+
     switch (period) {
       case 'today':
         return today;
@@ -156,10 +170,10 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
     if (isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
-    
+
     // Get earnings data from cache
     final earnings = _earningsCache[period];
-    
+
     if (earnings == null) {
       return Center(
         child: Column(
@@ -176,7 +190,7 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
         ),
       );
     }
-    
+
     return RefreshIndicator(
       onRefresh: () => _loadEarnings(period),
       child: SingleChildScrollView(
@@ -184,7 +198,11 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildEarningsSummary(earnings.totalEarnings, earnings.tripCount, period),
+            _buildEarningsSummary(
+              earnings.totalEarnings,
+              earnings.tripCount,
+              period,
+            ),
             _buildTripList(earnings.trips),
           ],
         ),
@@ -192,7 +210,11 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
     );
   }
 
-  Widget _buildEarningsSummary(double totalEarnings, int tripCount, String periodName) {
+  Widget _buildEarningsSummary(
+    double totalEarnings,
+    int tripCount,
+    String periodName,
+  ) {
     String periodLabel;
     switch (periodName) {
       case 'today':
@@ -207,7 +229,7 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
       default:
         periodLabel = 'Earnings';
     }
-    
+
     return Container(
       padding: const EdgeInsets.all(20),
       margin: const EdgeInsets.all(16),
@@ -251,10 +273,7 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
                 children: [
                   const Text(
                     'Completed Trips',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -273,10 +292,7 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
                   children: [
                     const Text(
                       'Average Per Trip',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 14,
-                      ),
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -304,7 +320,11 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.directions_car_outlined, size: 64, color: Colors.grey[400]),
+              Icon(
+                Icons.directions_car_outlined,
+                size: 64,
+                color: Colors.grey[400],
+              ),
               const SizedBox(height: 16),
               Text(
                 'No trips completed in this period',
@@ -315,7 +335,7 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
         ),
       );
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -323,10 +343,7 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Text(
             'Trip History',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
         ),
         ListView.builder(
@@ -335,15 +352,17 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
           itemCount: trips.length,
           itemBuilder: (context, index) {
             final trip = trips[index].data() as Map<String, dynamic>;
-            
+
             // Safely parse timestamps with null check
-            final Timestamp? completionTimestamp = trip['completionTime'] as Timestamp?;
-            final DateTime completionTime = completionTimestamp?.toDate() ?? DateTime.now();
-            
+            final Timestamp? completionTimestamp =
+                trip['completionTime'] as Timestamp?;
+            final DateTime completionTime =
+                completionTimestamp?.toDate() ?? DateTime.now();
+
             // Get pickup and dropoff from nested objects
             final pickup = trip['pickup'] as Map<String, dynamic>? ?? {};
             final dropoff = trip['dropoff'] as Map<String, dynamic>? ?? {};
-            
+
             // Get fare
             final dynamic fareValue = trip['fare'];
             double fare = 0.0;
@@ -352,7 +371,7 @@ class _EarningsScreenState extends State<EarningsScreen> with SingleTickerProvid
             } else if (fareValue is String) {
               fare = double.tryParse(fareValue) ?? 0.0;
             }
-            
+
             return Card(
               margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
               child: ListTile(

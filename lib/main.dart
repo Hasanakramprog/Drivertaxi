@@ -16,7 +16,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taxi_driver_app/services/face_verification_service.dart';
 
 // FEATURE FLAGS
-const bool ENABLE_FACE_VERIFICATION = false; // Set to true to enable face verification
+const bool ENABLE_FACE_VERIFICATION =
+    false; // Set to true to enable face verification
 
 // Define the global navigator key
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -26,44 +27,47 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   print("Handling a background message: ${message.messageId}");
-   _handleFcmMessage(message);
+  _handleFcmMessage(message);
 }
+
 // Common message handling logic for both background and foreground
 void _handleFcmMessage(RemoteMessage message) {
   print('Message data: ${message.data}');
-  
+
   // Handle trip updates
   if (message.data['notificationType'] == 'tripUpdate') {
     final tripId = message.data['tripId'];
     if (tripId != null) {
       // Save the trip ID for when app is reopened
       _saveActiveTrip(tripId);
-      
+
       // If app is in foreground, navigate to trip
       if (navigatorKey.currentContext != null) {
         final tripProvider = Provider.of<TripProvider>(
           navigatorKey.currentContext!,
-          listen: false
+          listen: false,
         );
         tripProvider.loadTrip(tripId);
       }
     }
   }
-  
+
   if (message.notification != null) {
-    print('Message notification: ${message.notification!.title}, ${message.notification!.body}');
+    print(
+      'Message notification: ${message.notification!.title}, ${message.notification!.body}',
+    );
   }
-  
+
   // Handle different message types based on the data
   final data = message.data;
-  
+
   // Check if it's a trip request notification
   if (data['notificationType'] == 'tripRequest') {
     // Only attempt to process if context is available (app is running)
     if (navigatorKey.currentContext != null) {
       final tripProvider = Provider.of<TripProvider>(
         navigatorKey.currentContext!,
-        listen: false
+        listen: false,
       );
       tripProvider.processFcmNotification(data);
     } else {
@@ -86,6 +90,7 @@ Future<void> _saveActiveTrip(String tripId) async {
   SharedPreferences prefs = await SharedPreferences.getInstance();
   await prefs.setString('active_trip_id', tripId);
 }
+
 // Add this function after _setupForegroundMessageHandling()
 Future<void> _checkDailyVerification() async {
   // Check feature flag first
@@ -93,9 +98,9 @@ Future<void> _checkDailyVerification() async {
     print('Face verification is disabled via feature flag');
     return;
   }
-  
+
   final faceService = FaceVerificationService();
-  
+
   // Check if verification is needed
   if (await faceService.needsDailyVerification()) {
     // Store a flag that verification is needed
@@ -111,11 +116,11 @@ void _startPeriodicTokenRefresh() {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
       print('Periodic FCM token refresh triggered');
-      
+
       try {
         final messaging = FirebaseMessaging.instance;
         final token = await messaging.getToken();
-        
+
         if (token != null) {
           await _updateTokenInFirestore(token);
           print('Periodic FCM token refresh completed');
@@ -130,27 +135,28 @@ void _startPeriodicTokenRefresh() {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  
+
   // Check for saved active trip
   SharedPreferences prefs = await SharedPreferences.getInstance();
-  final activeTripId = prefs.getString('active_trip_id'); 
+  final activeTripId = prefs.getString('active_trip_id');
   // Set up FCM background handler
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-    // Request notification permissions
+  // Request notification permissions
   await _requestNotificationPermissions();
-  
+
   // Start periodic token refresh
   _startPeriodicTokenRefresh();
-  
+
   // Set up foreground message handlers
   _setupForegroundMessageHandling();
   // Check daily verification status (controlled by feature flag)
   await _checkDailyVerification();
   runApp(MyApp(initialTripId: activeTripId));
 }
+
 Future<void> _requestNotificationPermissions() async {
   final messaging = FirebaseMessaging.instance;
-  
+
   // Request permission
   NotificationSettings settings = await messaging.requestPermission(
     alert: true,
@@ -158,19 +164,19 @@ Future<void> _requestNotificationPermissions() async {
     sound: true,
     provisional: false,
   );
-  
+
   print('User notification permission status: ${settings.authorizationStatus}');
-  
+
   // Setup token refresh listener - this is the key improvement!
   messaging.onTokenRefresh.listen((newToken) {
     print('FCM Token refreshed: $newToken');
     _updateTokenInFirestore(newToken);
   });
-  
+
   // Get initial FCM token (but don't save it here if user not logged in)
   final token = await messaging.getToken();
   print('Initial FCM Token: $token');
-  
+
   // Only save if user is already logged in, otherwise save it in AuthProvider
   final currentUser = FirebaseAuth.instance.currentUser;
   if (currentUser != null) {
@@ -182,9 +188,10 @@ Future<void> _requestNotificationPermissions() async {
     print('Stored FCM token for later use after login');
   }
 }
+
 Future<void> _updateTokenInFirestore(String? token) async {
   if (token == null || token.isEmpty) return;
-  
+
   try {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
@@ -192,18 +199,22 @@ Future<void> _updateTokenInFirestore(String? token) async {
       await FirebaseFirestore.instance
           .collection('drivers')
           .doc(currentUser.uid)
-          .set({
-        'fcmToken': token,
-        'lastTokenUpdate': FieldValue.serverTimestamp(),
-        'tokenUpdatedAt': DateTime.now().toIso8601String(),
-      }, SetOptions(merge: true)); // Use merge to avoid overwriting other data
-      
-      print('FCM token successfully updated in Firestore for user: ${currentUser.uid}');
-      
+          .set(
+            {
+              'fcmToken': token,
+              'lastTokenUpdate': FieldValue.serverTimestamp(),
+              'tokenUpdatedAt': DateTime.now().toIso8601String(),
+            },
+            SetOptions(merge: true),
+          ); // Use merge to avoid overwriting other data
+
+      print(
+        'FCM token successfully updated in Firestore for user: ${currentUser.uid}',
+      );
+
       // Also store locally for quick access
       SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setString('current_fcm_token', token);
-      
     } else {
       print('Cannot update FCM token: No user is currently logged in');
       // Store locally for when user logs in
@@ -223,14 +234,14 @@ Future<void> handlePendingFCMToken() async {
   try {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     final pendingToken = prefs.getString('pending_fcm_token');
-    
+
     if (pendingToken != null && pendingToken.isNotEmpty) {
       print('Processing pending FCM token after login');
       await _updateTokenInFirestore(pendingToken);
       // Clear the pending token
       await prefs.remove('pending_fcm_token');
     }
-    
+
     // Also get fresh token in case it changed
     final messaging = FirebaseMessaging.instance;
     final currentToken = await messaging.getToken();
@@ -242,12 +253,13 @@ Future<void> handlePendingFCMToken() async {
     print('Error handling pending FCM token: $e');
   }
 }
+
 void _setupForegroundMessageHandling() {
   // Handle messages received while the app is in foreground
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     print('Got a message whilst in the foreground!');
     _handleFcmMessage(message);
-    
+
     // You can also show a local notification here if needed
     // This is useful for immediate visual feedback when the app is open
   });
@@ -256,7 +268,7 @@ void _setupForegroundMessageHandling() {
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
     print('A notification was tapped to open the app!');
     _handleFcmMessage(message);
-    
+
     // You can navigate to specific screens based on the notification
     // For example:
     if (message.data['screen'] == 'trip_details') {
@@ -266,9 +278,10 @@ void _setupForegroundMessageHandling() {
     }
   });
 }
+
 class MyApp extends StatelessWidget {
   final String? initialTripId;
-  
+
   const MyApp({Key? key, this.initialTripId}) : super(key: key);
 
   @override
@@ -279,9 +292,10 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => LocationProvider()),
         ChangeNotifierProvider(create: (_) => TripProvider()),
         ChangeNotifierProxyProvider<TripProvider, NotificationProvider>(
-          create: (context) => NotificationProvider(
-            Provider.of<TripProvider>(context, listen: false),
-          ),
+          create:
+              (context) => NotificationProvider(
+                Provider.of<TripProvider>(context, listen: false),
+              ),
           update: (context, tripProvider, previous) {
             final provider = previous ?? NotificationProvider(tripProvider);
             // Initialize the notification provider
@@ -299,7 +313,7 @@ class MyApp extends StatelessWidget {
           visualDensity: VisualDensity.adaptivePlatformDensity,
         ),
         debugShowCheckedModeBanner: false,
-         home: AuthWrapper(initialTripId: initialTripId),
+        home: AuthWrapper(initialTripId: initialTripId),
       ),
     );
   }

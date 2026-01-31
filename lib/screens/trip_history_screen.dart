@@ -13,16 +13,17 @@ class TripHistoryScreen extends StatefulWidget {
   State<TripHistoryScreen> createState() => _TripHistoryScreenState();
 }
 
-class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTickerProviderStateMixin {
+class _TripHistoryScreenState extends State<TripHistoryScreen>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final DateFormat _dateFormat = DateFormat('MMM d, yyyy • h:mm a');
-  
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
   }
-  
+
   @override
   void dispose() {
     _tabController.dispose();
@@ -53,23 +54,27 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
       ),
     );
   }
-  
+
   Widget _buildTripList(String filterType) {
     final tripProvider = Provider.of<TripProvider>(context);
     final driverId = FirebaseAuth.instance.currentUser?.uid;
-    
+
     if (driverId == null) {
       return const Center(child: Text('Not logged in'));
     }
-    
-    Query query = FirebaseFirestore.instance.collection('trips')
-      .where('driverId', isEqualTo: driverId)
-      .orderBy('createdAt', descending: true);
-    
+
+    Query query = FirebaseFirestore.instance
+        .collection('trips')
+        .where('driverId', isEqualTo: driverId)
+        .orderBy('createdAt', descending: true);
+
     // Apply filters based on tab
     switch (filterType) {
       case 'active':
-        query = query.where('status', whereIn: ['accepted', 'arriving', 'arrived', 'inprogress']);
+        query = query.where(
+          'status',
+          whereIn: ['accepted', 'arriving', 'arrived', 'inprogress'],
+        );
         break;
       case 'completed':
         query = query.where('status', isEqualTo: 'completed');
@@ -78,18 +83,18 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
         query = query.where('status', isEqualTo: 'cancelled');
         break;
     }
-    
+
     return StreamBuilder<QuerySnapshot>(
       stream: query.snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
-        
+
         if (snapshot.hasError) {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
-        
+
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return Center(
             child: Column(
@@ -103,28 +108,25 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
                 const SizedBox(height: 16),
                 Text(
                   _getEmptyMessage(filterType),
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.grey.shade600,
-                  ),
+                  style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
                   textAlign: TextAlign.center,
                 ),
               ],
             ),
           );
         }
-        
+
         return ListView.builder(
           padding: const EdgeInsets.all(8),
           itemCount: snapshot.data!.docs.length,
           itemBuilder: (context, index) {
             final tripDoc = snapshot.data!.docs[index];
             final tripData = tripDoc.data() as Map<String, dynamic>;
-            
+
             // Convert Firestore timestamp to DateTime
             final Timestamp? createdTimestamp = tripData['createdAt'];
             final DateTime? createdDate = createdTimestamp?.toDate();
-            
+
             return Card(
               margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
               child: InkWell(
@@ -150,8 +152,8 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(
-                            createdDate != null 
-                                ? _dateFormat.format(createdDate) 
+                            createdDate != null
+                                ? _dateFormat.format(createdDate)
                                 : 'Unknown date',
                             style: const TextStyle(
                               color: Colors.grey,
@@ -162,7 +164,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
                         ],
                       ),
                       const Divider(),
-                      
+
                       // Pickup and dropoff locations
                       Row(
                         children: [
@@ -178,22 +180,21 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
                           ),
                           Expanded(
                             child: Text(
-                              tripData['pickup']['address'] ?? 'Unknown pickup location',
-                              style: const TextStyle(
-                                fontSize: 14,
-                              ),
+                              tripData['pickup']['address'] ??
+                                  'Unknown pickup location',
+                              style: const TextStyle(fontSize: 14),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
                       ),
-                      
+
                       // Show stops if any
-                      if (tripData['stops'] != null && 
+                      if (tripData['stops'] != null &&
                           (tripData['stops'] as List).isNotEmpty)
                         ..._buildStopsWidgets(tripData['stops']),
-                      
+
                       Row(
                         children: [
                           const SizedBox(
@@ -208,19 +209,18 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
                           ),
                           Expanded(
                             child: Text(
-                              tripData['dropoff']['address'] ?? 'Unknown destination',
-                              style: const TextStyle(
-                                fontSize: 14,
-                              ),
+                              tripData['dropoff']['address'] ??
+                                  'Unknown destination',
+                              style: const TextStyle(fontSize: 14),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
                       ),
-                      
+
                       const SizedBox(height: 12),
-                      
+
                       // Trip details (fare, etc.)
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -275,7 +275,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
       },
     );
   }
-  
+
   List<Widget> _buildStopsWidgets(List stops) {
     return List.generate(
       stops.length,
@@ -284,20 +284,13 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
           const SizedBox(
             width: 30,
             child: Center(
-              child: Icon(
-                Icons.circle,
-                color: Colors.orange,
-                size: 12,
-              ),
+              child: Icon(Icons.circle, color: Colors.orange, size: 12),
             ),
           ),
           Expanded(
             child: Text(
               stops[index]['address'] ?? 'Stop ${index + 1}',
-              style: const TextStyle(
-                fontSize: 14,
-                color: Colors.grey,
-              ),
+              style: const TextStyle(fontSize: 14, color: Colors.grey),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -306,11 +299,11 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
       ),
     );
   }
-  
+
   Widget _buildStatusChip(String status) {
     Color chipColor;
     String statusText;
-    
+
     switch (status) {
       case 'accepted':
         chipColor = Colors.orange;
@@ -337,7 +330,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
         chipColor = Colors.grey;
         statusText = status.capitalize();
     }
-    
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -355,7 +348,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
       ),
     );
   }
-  
+
   IconData _getEmptyIcon(String filterType) {
     switch (filterType) {
       case 'active':
@@ -368,7 +361,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
         return Icons.history;
     }
   }
-  
+
   String _getEmptyMessage(String filterType) {
     switch (filterType) {
       case 'active':
@@ -381,12 +374,12 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> with SingleTicker
         return 'No trips found.';
     }
   }
-  
+
   String _formatDuration(int seconds) {
     final minutes = (seconds / 60).round();
     return '$minutes min';
   }
-  
+
   String _formatDistance(double distanceInKm) {
     return '${distanceInKm.toStringAsFixed(1)} km';
   }

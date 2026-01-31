@@ -13,6 +13,7 @@ import 'package:flutter/services.dart'; // Add this import at the top
 // Add these imports at the top
 import 'dart:ui' as ui;
 import 'dart:typed_data';
+
 class DriverMap extends StatefulWidget {
   const DriverMap({Key? key}) : super(key: key);
 
@@ -25,233 +26,367 @@ class _DriverMapState extends State<DriverMap> {
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
   final Set<Circle> _circles = {}; // Add this for red zones
-    // Add these variables for custom taxi icons
+  // Add these variables for custom taxi icons
   BitmapDescriptor? _taxiOnlineIcon;
   BitmapDescriptor? _taxiOfflineIcon;
   bool _iconsLoaded = false;
   // Map camera position - will be updated based on current location
   CameraPosition _initialCameraPosition = const CameraPosition(
-   target: LatLng(33.8938, 35.5018), // Beirut, Lebanon coordinates
+    target: LatLng(33.8938, 35.5018), // Beirut, Lebanon coordinates
     zoom: 14.0,
   );
-  
+
   bool _mapInitialized = false;
   bool _isMapLoading = true;
   bool _isLocationLoading = true;
   String _loadingStatus = 'Loading map...';
-  
+
   // Add these variables for hotspots
   List<Map<String, dynamic>> _hotspots = [];
   bool _showHotspots = false;
   bool _isLoadingHotspots = false;
-  
+
   @override
   void initState() {
     super.initState();
-      // Load custom icons first
-  _loadCustomIcons();
-  
+    // Load custom icons first
+    _loadCustomIcons();
+
     // Start location initialization after a short delay to let map start loading
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeLocationAfterDelay();
       _loadHotspots(); // Add this
     });
   }
+
   // Add this method after _updateHotspotCircles()
-Future<void> _zoomToShowAllHotspots() async {
-  if (_hotspots.isEmpty) {
-    print('🔥 No hotspots to zoom to');
-    return;
-  }
-  
-  try {
-    final controller = await _controller.future;
-    
-    // Calculate bounds for all hotspots
-    List<LatLng> hotspotPoints = [];
-    
-    for (var hotspot in _hotspots) {
-      final center = hotspot['center'];
-      if (center != null) {
-        hotspotPoints.add(LatLng(
-          (center['latitude'] ?? 0.0).toDouble(),
-          (center['longitude'] ?? 0.0).toDouble(),
-        ));
-      }
-    }
-    
-    if (hotspotPoints.isEmpty) return;
-    
-    // If only one hotspot, zoom to it
-    if (hotspotPoints.length == 1) {
-      await controller.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(
-            target: hotspotPoints.first,
-            zoom: 12.0, // Zoom level to see 2km radius
-          ),
-        ),
-      );
+  Future<void> _zoomToShowAllHotspots() async {
+    if (_hotspots.isEmpty) {
+      print('🔥 No hotspots to zoom to');
       return;
     }
-    
-    // Calculate bounds for multiple hotspots
-    double minLat = hotspotPoints.first.latitude;
-    double maxLat = hotspotPoints.first.latitude;
-    double minLng = hotspotPoints.first.longitude;
-    double maxLng = hotspotPoints.first.longitude;
-    
-    for (var point in hotspotPoints) {
-      minLat = minLat < point.latitude ? minLat : point.latitude;
-      maxLat = maxLat > point.latitude ? maxLat : point.latitude;
-      minLng = minLng < point.longitude ? minLng : point.longitude;
-      maxLng = maxLng > point.longitude ? maxLng : point.longitude;
-    }
-    
-    // Add padding to show the full circles (2km radius ≈ 0.018 degrees)
-    const padding = 0.025;
-    
-    await controller.animateCamera(
-      CameraUpdate.newLatLngBounds(
-        LatLngBounds(
-          southwest: LatLng(minLat - padding, minLng - padding),
-          northeast: LatLng(maxLat + padding, maxLng + padding),
-        ),
-        100.0, // padding in pixels
-      ),
-    );
-    
-    print('🔥 Zoomed to show ${hotspotPoints.length} hotspots');
-  } catch (e) {
-    print('🔥 Error zooming to hotspots: $e');
-  }
-}
-  
-  // Add this method to create taxi emoji icon
-Future<BitmapDescriptor> _createTaxiIcon(bool isOnline) async {
-  return await BitmapDescriptor.fromBytes(
-    await _getBytesFromCanvas(
-      isOnline ? '🚕' : '🚖', 
-      isOnline ? Colors.green : Colors.red,
-    ),
-  );
-}
 
-Future<Uint8List> _getBytesFromCanvas(String emoji, Color backgroundColor) async {
-  final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
-  final Canvas canvas = Canvas(pictureRecorder);
-  const double size = 100.0;
-  
-  // Draw background circle
-  final Paint backgroundPaint = Paint()
-    ..color = backgroundColor.withOpacity(0.8);
-  canvas.drawCircle(const Offset(size / 2, size / 2), size / 2, backgroundPaint);
-  
-  // Draw border
-  final Paint borderPaint = Paint()
-    ..color = Colors.white
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 4.0;
-  canvas.drawCircle(const Offset(size / 2, size / 2), size / 2 - 2, borderPaint);
-  
-  // Draw emoji
-  final textPainter = TextPainter(
-    text: TextSpan(
-      text: emoji,
-      style: const TextStyle(fontSize: 40),
-    ),
-    textDirection: TextDirection.ltr,
-  );
-  textPainter.layout();
-  textPainter.paint(
-    canvas, 
-    Offset(
-      (size - textPainter.width) / 2, 
-      (size - textPainter.height) / 2,
-    ),
-  );
-  
-  final ui.Picture picture = pictureRecorder.endRecording();
-  final ui.Image image = await picture.toImage(size.toInt(), size.toInt());
-  final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-  
-  return byteData!.buffer.asUint8List();
-}
-  // Add this method to load custom taxi icons
-Future<void> _loadCustomIcons() async {
-  try {
-    print('🚕 Creating custom taxi icons...');
-    
-    _taxiOnlineIcon = await _createTaxiIcon(true);
-    _taxiOfflineIcon = await _createTaxiIcon(false);
-    
-    setState(() {
-      _iconsLoaded = true;
-    });
-    
-    print('🚕 Custom taxi emoji icons created successfully');
-  } catch (e) {
-    print('🚕 Error creating custom icons: $e');
-    // Will fallback to default icons
+    try {
+      final controller = await _controller.future;
+
+      // Calculate bounds for all hotspots
+      List<LatLng> hotspotPoints = [];
+
+      for (var hotspot in _hotspots) {
+        final center = hotspot['center'];
+        if (center != null) {
+          hotspotPoints.add(
+            LatLng(
+              (center['latitude'] ?? 0.0).toDouble(),
+              (center['longitude'] ?? 0.0).toDouble(),
+            ),
+          );
+        }
+      }
+
+      if (hotspotPoints.isEmpty) return;
+
+      // If only one hotspot, zoom to it
+      if (hotspotPoints.length == 1) {
+        await controller.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: hotspotPoints.first,
+              zoom: 12.0, // Zoom level to see 2km radius
+            ),
+          ),
+        );
+        return;
+      }
+
+      // Calculate bounds for multiple hotspots
+      double minLat = hotspotPoints.first.latitude;
+      double maxLat = hotspotPoints.first.latitude;
+      double minLng = hotspotPoints.first.longitude;
+      double maxLng = hotspotPoints.first.longitude;
+
+      for (var point in hotspotPoints) {
+        minLat = minLat < point.latitude ? minLat : point.latitude;
+        maxLat = maxLat > point.latitude ? maxLat : point.latitude;
+        minLng = minLng < point.longitude ? minLng : point.longitude;
+        maxLng = maxLng > point.longitude ? maxLng : point.longitude;
+      }
+
+      // Add padding to show the full circles (2km radius ≈ 0.018 degrees)
+      const padding = 0.025;
+
+      await controller.animateCamera(
+        CameraUpdate.newLatLngBounds(
+          LatLngBounds(
+            southwest: LatLng(minLat - padding, minLng - padding),
+            northeast: LatLng(maxLat + padding, maxLng + padding),
+          ),
+          100.0, // padding in pixels
+        ),
+      );
+
+      print('🔥 Zoomed to show ${hotspotPoints.length} hotspots');
+    } catch (e) {
+      print('🔥 Error zooming to hotspots: $e');
+    }
   }
-}
+
+  // Create professional taxi car icon with direction indicator
+  Future<BitmapDescriptor> _createTaxiIcon(bool isOnline) async {
+    return await BitmapDescriptor.fromBytes(await _drawTaxiCar(isOnline));
+  }
+
+  // Draw a professional taxi car icon
+  Future<Uint8List> _drawTaxiCar(bool isOnline) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    const double size = 120.0;
+    const double carWidth = 80.0;
+    const double carHeight = 100.0;
+    final centerX = size / 2;
+    final centerY = size / 2;
+
+    // Status color
+    final statusColor = isOnline ? Colors.green : Colors.red;
+
+    // Draw shadow
+    final shadowPaint =
+        Paint()
+          ..color = Colors.black.withOpacity(0.3)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(centerX, centerY + carHeight / 2 + 5),
+        width: carWidth * 0.8,
+        height: 15,
+      ),
+      shadowPaint,
+    );
+
+    // Draw car body (main rectangle)
+    final carBodyPaint =
+        Paint()
+          ..color = statusColor
+          ..style = PaintingStyle.fill;
+
+    final carRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: Offset(centerX, centerY),
+        width: carWidth * 0.6,
+        height: carHeight * 0.7,
+      ),
+      const Radius.circular(8),
+    );
+    canvas.drawRRect(carRect, carBodyPaint);
+
+    // Draw car roof/cabin (smaller rectangle on top)
+    final roofPaint = Paint()..color = statusColor.withOpacity(0.85);
+    final roofRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: Offset(centerX, centerY - carHeight * 0.15),
+        width: carWidth * 0.45,
+        height: carHeight * 0.35,
+      ),
+      const Radius.circular(6),
+    );
+    canvas.drawRRect(roofRect, roofPaint);
+
+    // Draw windows (white rectangles)
+    final windowPaint = Paint()..color = Colors.white.withOpacity(0.9);
+
+    // Front window
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+          center: Offset(centerX, centerY - carHeight * 0.25),
+          width: carWidth * 0.35,
+          height: carHeight * 0.15,
+        ),
+        const Radius.circular(3),
+      ),
+      windowPaint,
+    );
+
+    // Rear window
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+          center: Offset(centerX, centerY - carHeight * 0.05),
+          width: carWidth * 0.35,
+          height: carHeight * 0.15,
+        ),
+        const Radius.circular(3),
+      ),
+      windowPaint,
+    );
+
+    // Draw headlights (small yellow circles at front)
+    final headlightPaint = Paint()..color = Colors.yellow.shade300;
+    canvas.drawCircle(
+      Offset(centerX - carWidth * 0.15, centerY + carHeight * 0.28),
+      4,
+      headlightPaint,
+    );
+    canvas.drawCircle(
+      Offset(centerX + carWidth * 0.15, centerY + carHeight * 0.28),
+      4,
+      headlightPaint,
+    );
+
+    // Draw "TAXI" sign on roof
+    final taxiSignPaint = Paint()..color = Colors.yellow.shade600;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+          center: Offset(centerX, centerY - carHeight * 0.38),
+          width: carWidth * 0.25,
+          height: carHeight * 0.08,
+        ),
+        const Radius.circular(2),
+      ),
+      taxiSignPaint,
+    );
+
+    // Draw direction arrow (pointing up/forward)
+    final arrowPaint =
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.fill;
+
+    final arrowPath = Path();
+    final arrowTop = centerY - carHeight * 0.45;
+    final arrowSize = 12.0;
+
+    arrowPath.moveTo(centerX, arrowTop); // Arrow tip
+    arrowPath.lineTo(
+      centerX - arrowSize / 2,
+      arrowTop + arrowSize,
+    ); // Left point
+    arrowPath.lineTo(
+      centerX - arrowSize / 4,
+      arrowTop + arrowSize,
+    ); // Left inner
+    arrowPath.lineTo(
+      centerX - arrowSize / 4,
+      arrowTop + arrowSize * 1.5,
+    ); // Left bottom
+    arrowPath.lineTo(
+      centerX + arrowSize / 4,
+      arrowTop + arrowSize * 1.5,
+    ); // Right bottom
+    arrowPath.lineTo(
+      centerX + arrowSize / 4,
+      arrowTop + arrowSize,
+    ); // Right inner
+    arrowPath.lineTo(
+      centerX + arrowSize / 2,
+      arrowTop + arrowSize,
+    ); // Right point
+    arrowPath.close();
+
+    canvas.drawPath(arrowPath, arrowPaint);
+
+    // Draw white border around entire icon
+    final borderPaint =
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.0;
+
+    canvas.drawCircle(
+      Offset(centerX, centerY),
+      size / 2 - 2,
+      Paint()
+        ..color = Colors.black.withOpacity(0.2)
+        ..style = PaintingStyle.fill,
+    );
+
+    canvas.drawCircle(Offset(centerX, centerY), size / 2 - 4, borderPaint);
+
+    final ui.Picture picture = pictureRecorder.endRecording();
+    final ui.Image image = await picture.toImage(size.toInt(), size.toInt());
+    final ByteData? byteData = await image.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
+
+    return byteData!.buffer.asUint8List();
+  }
+
+  // Load custom professional taxi car icons
+  Future<void> _loadCustomIcons() async {
+    try {
+      print('🚕 Creating custom taxi car icons...');
+
+      _taxiOnlineIcon = await _createTaxiIcon(true);
+      _taxiOfflineIcon = await _createTaxiIcon(false);
+
+      setState(() {
+        _iconsLoaded = true;
+      });
+
+      print('🚕 Custom taxi car icons created successfully');
+    } catch (e) {
+      print('🚕 Error creating custom icons: $e');
+      // Will fallback to default icons
+    }
+  }
+
   // Add this method to load hotspots
-Future<void> _loadHotspots() async {
-  print('🔥 Starting to load hotspots...');
-  
-  if (mounted) {
-    setState(() {
-      _isLoadingHotspots = true;
-    });
-  }
-  
-  try {
-    // Try function first, fallback to direct Firestore
-    List<Map<String, dynamic>> hotspots = await HotspotService.getHotspotsFromFunction();
-    
-    if (hotspots.isEmpty) {
-      print('🔥 Function returned empty, trying Firestore...');
-      hotspots = await HotspotService.getHotspotsFromFirestore();
-    }
-    
-    print('🔥 Loaded ${hotspots.length} hotspots');
-    print('🔥 Hotspots data: $hotspots');
-    
+  Future<void> _loadHotspots() async {
+    print('🔥 Starting to load hotspots...');
+
     if (mounted) {
       setState(() {
-        _hotspots = hotspots;
-        _isLoadingHotspots = false;
+        _isLoadingHotspots = true;
       });
-      _updateHotspotCircles();
-      
-     
     }
-  } catch (e) {
-    print('🔥 Error loading hotspots: $e');
-    if (mounted) {
-      setState(() {
-        _isLoadingHotspots = false;
-      });
+
+    try {
+      // Try function first, fallback to direct Firestore
+      List<Map<String, dynamic>> hotspots =
+          await HotspotService.getHotspotsFromFunction();
+
+      if (hotspots.isEmpty) {
+        print('🔥 Function returned empty, trying Firestore...');
+        hotspots = await HotspotService.getHotspotsFromFirestore();
+      }
+
+      print('🔥 Loaded ${hotspots.length} hotspots');
+      print('🔥 Hotspots data: $hotspots');
+
+      if (mounted) {
+        setState(() {
+          _hotspots = hotspots;
+          _isLoadingHotspots = false;
+        });
+        _updateHotspotCircles();
+      }
+    } catch (e) {
+      print('🔥 Error loading hotspots: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingHotspots = false;
+        });
+      }
     }
   }
-}
-  
+
   // Add this method to update hotspot circles
   void _updateHotspotCircles() {
     _circles.clear();
-    
+
     if (!_showHotspots) return;
-    
+
     for (var hotspot in _hotspots) {
       final center = hotspot['center'];
       if (center == null) continue;
-      
+
       final intensity = hotspot['intensity'] as String? ?? 'low';
-      
+
       // Different colors based on intensity
       Color zoneColor;
       double strokeWidth;
-      
+
       switch (intensity) {
         case 'high':
           zoneColor = Colors.red.withOpacity(0.3);
@@ -269,7 +404,7 @@ Future<void> _loadHotspots() async {
           zoneColor = Colors.red.withOpacity(0.3);
           strokeWidth = 2.0;
       }
-      
+
       _circles.add(
         Circle(
           circleId: CircleId(hotspot['id'] ?? 'hotspot_${_circles.length}'),
@@ -285,26 +420,29 @@ Future<void> _loadHotspots() async {
       );
     }
   }
-  
+
   // Initialize location after a short delay
   Future<void> _initializeLocationAfterDelay() async {
     // Let the map start loading first
     await Future.delayed(const Duration(milliseconds: 800));
-    
+
     if (mounted) {
       setState(() {
         _loadingStatus = 'Getting your location...';
       });
     }
-    
+
     await _initializeMapWithCurrentLocation();
   }
-  
+
   // Initialize map with current location and set up LocationProvider
   Future<void> _initializeMapWithCurrentLocation() async {
     try {
-      final locationProvider = Provider.of<LocationProvider>(context, listen: false);
-      
+      final locationProvider = Provider.of<LocationProvider>(
+        context,
+        listen: false,
+      );
+
       // Ensure location provider is initialized
       if (!locationProvider.hasPermission) {
         if (mounted) {
@@ -314,7 +452,7 @@ Future<void> _loadHotspots() async {
         }
         await locationProvider.initialize();
       }
-      
+
       // Get current location and update camera position
       if (locationProvider.currentPosition != null) {
         _updateInitialCameraPosition(locationProvider);
@@ -330,14 +468,14 @@ Future<void> _loadHotspots() async {
           _updateInitialCameraPosition(locationProvider);
         }
       }
-      
+
       // Mark location as loaded
       if (mounted) {
         setState(() {
           _isLocationLoading = false;
           _loadingStatus = 'Location found!';
         });
-        
+
         // Hide loading after a short delay
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted) {
@@ -354,7 +492,7 @@ Future<void> _loadHotspots() async {
           _isLocationLoading = false;
           _loadingStatus = 'Location unavailable';
         });
-        
+
         // Hide error message after delay
         Future.delayed(const Duration(seconds: 2), () {
           if (mounted) {
@@ -366,11 +504,13 @@ Future<void> _loadHotspots() async {
       }
     }
   }
-  
+
   // Update the initial camera position based on current location
   void _updateInitialCameraPosition(LocationProvider locationProvider) {
     final position = locationProvider.currentPosition;
-    if (position?.latitude != null && position?.longitude != null && !_mapInitialized) {
+    if (position?.latitude != null &&
+        position?.longitude != null &&
+        !_mapInitialized) {
       // Use WidgetsBinding to defer setState until after the current build
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_mapInitialized) {
@@ -386,7 +526,7 @@ Future<void> _loadHotspots() async {
       });
     }
   }
-  
+
   @override
   Widget build(BuildContext context) {
     return Consumer2<LocationProvider, TripProvider>(
@@ -398,45 +538,52 @@ Future<void> _loadHotspots() async {
             _updateInitialCameraPosition(locationProvider);
           });
         }
-        
+
         // Update markers and polylines based on current data
         _updateMapData(locationProvider, tripProvider);
-        
+
         return Stack(
           children: [
             // Google Map
             GoogleMap(
               initialCameraPosition: _initialCameraPosition,
-              mapType: MapType.normal,
-              myLocationEnabled: true,
+              mapType:
+                  MapType
+                      .terrain, // Terrain view - faster loading than hybrid, shows roads with topography
+              myLocationEnabled:
+                  false, // Disable default blue dot since we have custom taxi marker
               myLocationButtonEnabled: false,
               zoomControlsEnabled: true,
               compassEnabled: true,
+              trafficEnabled:
+                  true, // Enable real-time traffic layer - critical for taxi drivers
               markers: _markers,
               polylines: _polylines,
               circles: _circles, // Add this line
               onMapCreated: (GoogleMapController controller) async {
                 _controller.complete(controller);
-                
+
                 // Mark map as loaded
                 if (mounted) {
                   setState(() {
                     _isMapLoading = false;
                   });
                 }
-                
+
                 // Set the controller in LocationProvider for automatic navigation
                 locationProvider.setMapController(controller);
-                
+
                 // Center map on current location once controller is ready
                 if (locationProvider.currentPosition != null) {
                   await _centerMapOnCurrentLocation(locationProvider);
                 }
               },
             ),
-            
+
             // Loading Overlay
-            if (_isMapLoading || _isLocationLoading || _loadingStatus.isNotEmpty)
+            if (_isMapLoading ||
+                _isLocationLoading ||
+                _loadingStatus.isNotEmpty)
               Container(
                 color: Colors.white.withOpacity(0.9),
                 child: Center(
@@ -448,7 +595,9 @@ Future<void> _loadHotspots() async {
                         Column(
                           children: [
                             const CircularProgressIndicator(
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.blue,
+                              ),
                               strokeWidth: 3,
                             ),
                             const SizedBox(height: 16),
@@ -462,14 +611,17 @@ Future<void> _loadHotspots() async {
                             ),
                           ],
                         ),
-                      
+
                       // Location loading indicator
-                      if (!_isMapLoading && (_isLocationLoading || _loadingStatus.isNotEmpty))
+                      if (!_isMapLoading &&
+                          (_isLocationLoading || _loadingStatus.isNotEmpty))
                         Column(
                           children: [
                             if (_isLocationLoading)
                               const CircularProgressIndicator(
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.green),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.green,
+                                ),
                                 strokeWidth: 3,
                               )
                             else if (_loadingStatus.contains('found'))
@@ -489,9 +641,10 @@ Future<void> _loadHotspots() async {
                               _loadingStatus,
                               style: TextStyle(
                                 fontSize: 16,
-                                color: _loadingStatus.contains('found')
-                                    ? Colors.green[700]
-                                    : _loadingStatus.contains('unavailable')
+                                color:
+                                    _loadingStatus.contains('found')
+                                        ? Colors.green[700]
+                                        : _loadingStatus.contains('unavailable')
                                         ? Colors.red[700]
                                         : Colors.grey[700],
                                 fontWeight: FontWeight.w500,
@@ -499,7 +652,7 @@ Future<void> _loadHotspots() async {
                             ),
                           ],
                         ),
-                      
+
                       // Progress indicator for sequential loading
                       if (_isMapLoading || _isLocationLoading)
                         Container(
@@ -515,27 +668,44 @@ Future<void> _loadHotspots() async {
                                     height: 24,
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
-                                      color: !_isMapLoading ? Colors.green : Colors.blue,
+                                      color:
+                                          !_isMapLoading
+                                              ? Colors.green
+                                              : Colors.blue,
                                       border: Border.all(
-                                        color: !_isMapLoading ? Colors.green : Colors.blue,
+                                        color:
+                                            !_isMapLoading
+                                                ? Colors.green
+                                                : Colors.blue,
                                         width: 2,
                                       ),
                                     ),
-                                    child: !_isMapLoading
-                                        ? const Icon(Icons.check, size: 16, color: Colors.white)
-                                        : const SizedBox(
-                                            width: 12,
-                                            height: 12,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                    child:
+                                        !_isMapLoading
+                                            ? const Icon(
+                                              Icons.check,
+                                              size: 16,
+                                              color: Colors.white,
+                                            )
+                                            : const SizedBox(
+                                              width: 12,
+                                              height: 12,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                valueColor:
+                                                    AlwaysStoppedAnimation<
+                                                      Color
+                                                    >(Colors.white),
+                                              ),
                                             ),
-                                          ),
                                   ),
                                   Expanded(
                                     child: Container(
                                       height: 2,
-                                      color: !_isMapLoading ? Colors.green : Colors.grey[300],
+                                      color:
+                                          !_isMapLoading
+                                              ? Colors.green
+                                              : Colors.grey[300],
                                     ),
                                   ),
                                   // Location loading step
@@ -544,44 +714,58 @@ Future<void> _loadHotspots() async {
                                     height: 24,
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
-                                      color: !_isLocationLoading 
-                                          ? Colors.green 
-                                          : _isMapLoading 
-                                              ? Colors.grey[300] 
+                                      color:
+                                          !_isLocationLoading
+                                              ? Colors.green
+                                              : _isMapLoading
+                                              ? Colors.grey[300]
                                               : Colors.blue,
                                       border: Border.all(
-                                        color: !_isLocationLoading 
-                                            ? Colors.green 
-                                            : _isMapLoading 
-                                                ? Colors.grey[300]! 
+                                        color:
+                                            !_isLocationLoading
+                                                ? Colors.green
+                                                : _isMapLoading
+                                                ? Colors.grey[300]!
                                                 : Colors.blue,
                                         width: 2,
                                       ),
                                     ),
-                                    child: !_isLocationLoading
-                                        ? const Icon(Icons.check, size: 16, color: Colors.white)
-                                        : !_isMapLoading
+                                    child:
+                                        !_isLocationLoading
+                                            ? const Icon(
+                                              Icons.check,
+                                              size: 16,
+                                              color: Colors.white,
+                                            )
+                                            : !_isMapLoading
                                             ? const SizedBox(
-                                                width: 12,
-                                                height: 12,
-                                                child: CircularProgressIndicator(
-                                                  strokeWidth: 2,
-                                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                                ),
-                                              )
+                                              width: 12,
+                                              height: 12,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                valueColor:
+                                                    AlwaysStoppedAnimation<
+                                                      Color
+                                                    >(Colors.white),
+                                              ),
+                                            )
                                             : null,
                                   ),
                                 ],
                               ),
                               const SizedBox(height: 8),
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Text(
                                     'Map',
                                     style: TextStyle(
                                       fontSize: 12,
-                                      color: !_isMapLoading ? Colors.green : Colors.blue,
+                                      color:
+                                          !_isMapLoading
+                                              ? Colors.green
+                                              : Colors.blue,
                                       fontWeight: FontWeight.w500,
                                     ),
                                   ),
@@ -589,10 +773,11 @@ Future<void> _loadHotspots() async {
                                     'Location',
                                     style: TextStyle(
                                       fontSize: 12,
-                                      color: !_isLocationLoading 
-                                          ? Colors.green 
-                                          : _isMapLoading 
-                                              ? Colors.grey[400] 
+                                      color:
+                                          !_isLocationLoading
+                                              ? Colors.green
+                                              : _isMapLoading
+                                              ? Colors.grey[400]
                                               : Colors.blue,
                                       fontWeight: FontWeight.w500,
                                     ),
@@ -606,7 +791,7 @@ Future<void> _loadHotspots() async {
                   ),
                 ),
               ),
-            
+
             // // Custom "My Location" button (only show when loading is complete)
             // if (!_isMapLoading && !_isLocationLoading && _loadingStatus.isEmpty)
             //   Positioned(
@@ -619,8 +804,8 @@ Future<void> _loadHotspots() async {
             //       elevation: 4,
             //       child: Icon(
             //         Icons.my_location,
-            //         color: locationProvider.currentPosition != null 
-            //             ? Colors.blue 
+            //         color: locationProvider.currentPosition != null
+            //             ? Colors.blue
             //             : Colors.grey,
             //       ),
             //       onPressed: () async {
@@ -628,7 +813,7 @@ Future<void> _loadHotspots() async {
             //       },
             //     ),
             //   ),
-            
+
             // Control Panel - All action buttons grouped together
             if (!_isMapLoading && !_isLocationLoading && _loadingStatus.isEmpty)
               Positioned(
@@ -640,12 +825,21 @@ Future<void> _loadHotspots() async {
                     // Online/Offline Status Card
                     Container(
                       margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
-                        color: locationProvider.isOnline ? Colors.green.shade50 : Colors.red.shade50,
+                        color:
+                            locationProvider.isOnline
+                                ? Colors.green.shade50
+                                : Colors.red.shade50,
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                          color: locationProvider.isOnline ? Colors.green : Colors.red,
+                          color:
+                              locationProvider.isOnline
+                                  ? Colors.green
+                                  : Colors.red,
                           width: 1.5,
                         ),
                         boxShadow: [
@@ -664,7 +858,10 @@ Future<void> _loadHotspots() async {
                             height: 8,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: locationProvider.isOnline ? Colors.green : Colors.red,
+                              color:
+                                  locationProvider.isOnline
+                                      ? Colors.green
+                                      : Colors.red,
                             ),
                           ),
                           const SizedBox(width: 6),
@@ -673,13 +870,16 @@ Future<void> _loadHotspots() async {
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.bold,
-                              color: locationProvider.isOnline ? Colors.green.shade700 : Colors.red.shade700,
+                              color:
+                                  locationProvider.isOnline
+                                      ? Colors.green.shade700
+                                      : Colors.red.shade700,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    
+
                     // Main Control Buttons
                     Container(
                       padding: const EdgeInsets.all(8),
@@ -700,7 +900,10 @@ Future<void> _loadHotspots() async {
                           // Online/Offline Toggle Button
                           FloatingActionButton(
                             heroTag: "onlineToggle",
-                            backgroundColor: locationProvider.isOnline ? Colors.green : Colors.red,
+                            backgroundColor:
+                                locationProvider.isOnline
+                                    ? Colors.green
+                                    : Colors.red,
                             foregroundColor: Colors.white,
                             elevation: 0,
                             onPressed: () async {
@@ -714,20 +917,25 @@ Future<void> _loadHotspots() async {
                             child: AnimatedSwitcher(
                               duration: const Duration(milliseconds: 300),
                               child: Icon(
-                                locationProvider.isOnline ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                                locationProvider.isOnline
+                                    ? Icons.pause_circle_filled
+                                    : Icons.play_circle_filled,
                                 key: ValueKey(locationProvider.isOnline),
                                 size: 28,
                               ),
                             ),
                           ),
-                          
+
                           const SizedBox(height: 8),
-                          
+
                           // Hotspots Toggle Button
                           FloatingActionButton(
                             heroTag: "hotspotsToggle",
                             mini: true,
-                            backgroundColor: _showHotspots ? Colors.orange : Colors.grey.shade400,
+                            backgroundColor:
+                                _showHotspots
+                                    ? Colors.orange
+                                    : Colors.grey.shade400,
                             foregroundColor: Colors.white,
                             elevation: 0,
                             onPressed: () {
@@ -742,10 +950,7 @@ Future<void> _loadHotspots() async {
                             },
                             child: Stack(
                               children: [
-                                Icon(
-                                  Icons.local_fire_department,
-                                  size: 20,
-                                ),
+                                Icon(Icons.local_fire_department, size: 20),
                                 if (_hotspots.isNotEmpty)
                                   Positioned(
                                     right: 0,
@@ -774,9 +979,9 @@ Future<void> _loadHotspots() async {
                               ],
                             ),
                           ),
-                          
+
                           const SizedBox(height: 8),
-                          
+
                           // Refresh Hotspots Button
                           FloatingActionButton(
                             heroTag: "refreshHotspots",
@@ -784,33 +989,40 @@ Future<void> _loadHotspots() async {
                             backgroundColor: Colors.blue,
                             foregroundColor: Colors.white,
                             elevation: 0,
-                            onPressed: _isLoadingHotspots ? null : () {
-                              HapticFeedback.lightImpact();
-                              _loadHotspots();
-                            },
+                            onPressed:
+                                _isLoadingHotspots
+                                    ? null
+                                    : () {
+                                      HapticFeedback.lightImpact();
+                                      _loadHotspots();
+                                    },
                             child: AnimatedSwitcher(
                               duration: const Duration(milliseconds: 300),
-                              child: _isLoadingHotspots
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        color: Colors.white,
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Icon(Icons.refresh, size: 20),
+                              child:
+                                  _isLoadingHotspots
+                                      ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          color: Colors.white,
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                      : const Icon(Icons.refresh, size: 20),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    
+
                     // Quick Stats Panel (Optional)
                     if (_hotspots.isNotEmpty)
                       Container(
                         margin: const EdgeInsets.only(top: 12),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.white.withOpacity(0.95),
                           borderRadius: BorderRadius.circular(16),
@@ -828,7 +1040,11 @@ Future<void> _loadHotspots() async {
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.local_fire_department, size: 12, color: Colors.orange),
+                                Icon(
+                                  Icons.local_fire_department,
+                                  size: 12,
+                                  color: Colors.orange,
+                                ),
                                 const SizedBox(width: 4),
                                 Text(
                                   '${_hotspots.length} zones',
@@ -855,7 +1071,7 @@ Future<void> _loadHotspots() async {
                   ],
                 ),
               ),
-            
+
             // Hotspot loading indicator
             if (_isLoadingHotspots)
               Positioned(
@@ -889,23 +1105,24 @@ Future<void> _loadHotspots() async {
                   ),
                 ),
               ),
-            
           ],
         );
       },
     );
   }
-  
+
   // Center map on current location with animation
-  Future<void> _centerMapOnCurrentLocation(LocationProvider locationProvider) async {
+  Future<void> _centerMapOnCurrentLocation(
+    LocationProvider locationProvider,
+  ) async {
     if (locationProvider.currentPosition == null) return;
-    
+
     final position = locationProvider.currentPosition!;
     final latitude = position.latitude;
     final longitude = position.longitude;
-    
+
     if (latitude == null || longitude == null) return;
-    
+
     try {
       final controller = await _controller.future;
       await controller.animateCamera(
@@ -922,66 +1139,111 @@ Future<void> _loadHotspots() async {
       print('Error centering map on current location: $e');
     }
   }
-  
+
   // Update map markers and polylines based on current state
-  void _updateMapData(LocationProvider locationProvider, TripProvider tripProvider) {
+  void _updateMapData(
+    LocationProvider locationProvider,
+    TripProvider tripProvider,
+  ) {
     _markers.clear();
     _polylines.clear();
-    
+
     // Add driver's current position marker
     if (locationProvider.currentPosition != null) {
       final position = locationProvider.currentPosition!;
       final latitude = position.latitude;
       final longitude = position.longitude;
-      
+
       if (latitude != null && longitude != null) {
         final driverLatLng = LatLng(latitude, longitude);
-           // Choose appropriate taxi icon
-      BitmapDescriptor markerIcon;
-      if (_iconsLoaded) {
-        markerIcon = locationProvider.isOnline 
-            ? (_taxiOnlineIcon ?? BitmapDescriptor.defaultMarker)
-            : (_taxiOfflineIcon ?? BitmapDescriptor.defaultMarker);
-      } else {
-        // Fallback to colored default markers while icons are loading
-        markerIcon = BitmapDescriptor.defaultMarkerWithHue(
-          locationProvider.isOnline 
-              ? BitmapDescriptor.hueBlue 
-              : BitmapDescriptor.hueViolet
-        );
-      }
-      
+
+        // Choose appropriate taxi car icon based on online status
+        BitmapDescriptor markerIcon;
+        if (_iconsLoaded) {
+          markerIcon =
+              locationProvider.isOnline
+                  ? (_taxiOnlineIcon ?? BitmapDescriptor.defaultMarker)
+                  : (_taxiOfflineIcon ?? BitmapDescriptor.defaultMarker);
+        } else {
+          // Fallback to colored default markers while icons are loading
+          markerIcon = BitmapDescriptor.defaultMarkerWithHue(
+            locationProvider.isOnline
+                ? BitmapDescriptor
+                    .hueGreen // Green for online
+                : BitmapDescriptor.hueRed, // Red for offline
+          );
+        }
+
         _markers.add(
           Marker(
             markerId: const MarkerId('driver_location'),
             position: driverLatLng,
             icon: markerIcon,
-            rotation: position.heading ?? 0.0,
+            rotation:
+                position.heading ??
+                0.0, // Rotate taxi icon based on heading direction
+            anchor: const Offset(0.5, 0.5), // Center the icon on the position
             infoWindow: InfoWindow(
-              title: 'Your Location',
-              snippet: locationProvider.isOnline ? 'Online' : 'Offline',
+              title: '🚕 Your Taxi',
+              snippet:
+                  locationProvider.isOnline
+                      ? '✅ Online - Ready for rides'
+                      : '⏸️ Offline',
             ),
           ),
         );
-        
+
         // Handle active trip markers and routes
         _handleTripMarkers(tripProvider, driverLatLng);
+
+        // Handle pickup preview marker (when dialog is minimized)
+        if (tripProvider.isShowingPickupPreview &&
+            tripProvider.pickupPreviewData != null) {
+          final pickupData = tripProvider.pickupPreviewData!;
+          final pickupLat = pickupData['latitude'] as double?;
+          final pickupLng = pickupData['longitude'] as double?;
+          final pickupAddress = pickupData['address'] as String?;
+
+          if (pickupLat != null && pickupLng != null) {
+            final pickupLatLng = LatLng(pickupLat, pickupLng);
+
+            // Add pickup marker
+            _markers.add(
+              Marker(
+                markerId: const MarkerId('pickup_preview'),
+                position: pickupLatLng,
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueGreen,
+                ),
+                infoWindow: InfoWindow(
+                  title: '📍 Pickup Location',
+                  snippet: pickupAddress ?? 'Rider pickup point',
+                ),
+              ),
+            );
+
+            // Center map to show both driver and pickup
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _fitMapToBounds([driverLatLng, pickupLatLng]);
+            });
+          }
+        }
       }
     }
-    
+
     // Update hotspot circles
     _updateHotspotCircles();
   }
-  
+
   // Handle trip-related markers and routes
   void _handleTripMarkers(TripProvider tripProvider, LatLng driverLocation) {
     if (tripProvider.currentTripData == null) return;
-    
+
     final tripData = tripProvider.currentTripData!;
     final status = tripData['status'] as String?;
-    
+
     if (status == null) return;
-    
+
     switch (status) {
       case 'accepted':
       case 'arriving':
@@ -995,17 +1257,20 @@ Future<void> _loadHotspots() async {
         break;
     }
   }
-  
+
   // Add pickup marker and route
-  void _addPickupMarkerAndRoute(Map<String, dynamic> tripData, LatLng driverLocation) {
+  void _addPickupMarkerAndRoute(
+    Map<String, dynamic> tripData,
+    LatLng driverLocation,
+  ) {
     final pickup = tripData['pickup'];
     if (pickup == null) return;
-    
+
     final pickupLatLng = LatLng(
       pickup['latitude']?.toDouble() ?? 0.0,
       pickup['longitude']?.toDouble() ?? 0.0,
     );
-    
+
     _markers.add(
       Marker(
         markerId: const MarkerId('pickup_location'),
@@ -1017,24 +1282,27 @@ Future<void> _loadHotspots() async {
         ),
       ),
     );
-    
+
     // Draw route from driver to pickup
     _getDirectionsAndDrawRoute(driverLocation, pickupLatLng, 'pickup_route');
-    
+
     // Fit map to show both driver and pickup
     _fitMapToBounds([driverLocation, pickupLatLng]);
   }
-  
+
   // Add dropoff marker and route
-  void _addDropoffMarkerAndRoute(Map<String, dynamic> tripData, LatLng driverLocation) {
+  void _addDropoffMarkerAndRoute(
+    Map<String, dynamic> tripData,
+    LatLng driverLocation,
+  ) {
     final dropoff = tripData['dropoff'];
     if (dropoff == null) return;
-    
+
     final dropoffLatLng = LatLng(
       dropoff['latitude']?.toDouble() ?? 0.0,
       dropoff['longitude']?.toDouble() ?? 0.0,
     );
-    
+
     _markers.add(
       Marker(
         markerId: const MarkerId('dropoff_location'),
@@ -1046,37 +1314,44 @@ Future<void> _loadHotspots() async {
         ),
       ),
     );
-    
+
     // Draw route from driver to dropoff
     _getDirectionsAndDrawRoute(driverLocation, dropoffLatLng, 'dropoff_route');
-    
+
     // Fit map to show both driver and dropoff
     _fitMapToBounds([driverLocation, dropoffLatLng]);
   }
-  
+
   // Get directions and draw route
-  Future<void> _getDirectionsAndDrawRoute(LatLng origin, LatLng destination, String polylineId) async {
+  Future<void> _getDirectionsAndDrawRoute(
+    LatLng origin,
+    LatLng destination,
+    String polylineId,
+  ) async {
     try {
-      const apiKey = 'AIzaSyBghYBLMtYdxteEo5GXM6eTdF_8Cc47tis'; // Replace with your API key
-      
-      final url = 'https://maps.googleapis.com/maps/api/directions/json?'
+      const apiKey =
+          'AIzaSyBghYBLMtYdxteEo5GXM6eTdF_8Cc47tis'; // Replace with your API key
+
+      final url =
+          'https://maps.googleapis.com/maps/api/directions/json?'
           'origin=${origin.latitude},${origin.longitude}'
           '&destination=${destination.latitude},${destination.longitude}'
           '&mode=driving'
           '&key=$apiKey';
-      
+
       final response = await http.get(Uri.parse(url));
       final decoded = json.decode(response.body);
-      
+
       if (decoded['status'] == 'OK' && decoded['routes'].isNotEmpty) {
         final points = PolylinePoints().decodePolyline(
-          decoded['routes'][0]['overview_polyline']['points']
+          decoded['routes'][0]['overview_polyline']['points'],
         );
-        
-        final polylineCoordinates = points
-            .map((point) => LatLng(point.latitude, point.longitude))
-            .toList();
-        
+
+        final polylineCoordinates =
+            points
+                .map((point) => LatLng(point.latitude, point.longitude))
+                .toList();
+
         if (mounted) {
           // Schedule setState for after current build
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1085,7 +1360,10 @@ Future<void> _loadHotspots() async {
                 _polylines.add(
                   Polyline(
                     polylineId: PolylineId(polylineId),
-                    color: polylineId.contains('pickup') ? Colors.green : Colors.red,
+                    color:
+                        polylineId.contains('pickup')
+                            ? Colors.green
+                            : Colors.red,
                     points: polylineCoordinates,
                     width: 5,
                     patterns: [], // Solid line
@@ -1105,7 +1383,7 @@ Future<void> _loadHotspots() async {
       _drawStraightLine(origin, destination, polylineId);
     }
   }
-  
+
   // Draw straight line as fallback
   void _drawStraightLine(LatLng origin, LatLng destination, String polylineId) {
     if (mounted) {
@@ -1116,10 +1394,14 @@ Future<void> _loadHotspots() async {
             _polylines.add(
               Polyline(
                 polylineId: PolylineId(polylineId),
-                color: polylineId.contains('pickup') ? Colors.green : Colors.red,
+                color:
+                    polylineId.contains('pickup') ? Colors.green : Colors.red,
                 points: [origin, destination],
                 width: 3,
-                patterns: [PatternItem.dash(10), PatternItem.gap(5)], // Dashed line for fallback
+                patterns: [
+                  PatternItem.dash(10),
+                  PatternItem.gap(5),
+                ], // Dashed line for fallback
               ),
             );
           });
@@ -1127,29 +1409,29 @@ Future<void> _loadHotspots() async {
       });
     }
   }
-  
+
   // Fit map to show all specified points
   Future<void> _fitMapToBounds(List<LatLng> points) async {
     if (points.length <= 1) return;
-    
+
     try {
       final controller = await _controller.future;
-      
+
       double minLat = points.first.latitude;
       double maxLat = points.first.latitude;
       double minLng = points.first.longitude;
       double maxLng = points.first.longitude;
-      
+
       for (var point in points) {
         minLat = minLat < point.latitude ? minLat : point.latitude;
         maxLat = maxLat > point.latitude ? maxLat : point.latitude;
         minLng = minLng < point.longitude ? minLng : point.longitude;
         maxLng = maxLng > point.longitude ? maxLng : point.longitude;
       }
-      
+
       // Add some padding to the bounds
       const padding = 0.001;
-      
+
       await controller.animateCamera(
         CameraUpdate.newLatLngBounds(
           LatLngBounds(
@@ -1163,7 +1445,7 @@ Future<void> _loadHotspots() async {
       print('Error fitting map to bounds: $e');
     }
   }
-  
+
   @override
   void dispose() {
     super.dispose();
