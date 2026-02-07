@@ -1,0 +1,21 @@
+// Add this code after line 396 (after the ratings row closing bracket)
+
+                          // Add Tier Badge
+                          if (_driver?.metrics != null) ...[
+                            const SizedBox(height: 12),
+                            TierBadgeWidget(
+                              tier: _driver!.metrics!.tier,
+                              size: TierBadgeSize.medium,
+                            ),
+                          ],
+
+// Add this code after line 401 (after "const SizedBox(height: 24),")
+
+                    // Driver Metrics Dashboard
+                    if (_driver?.metrics != null) ...[
+                      MetricsDashboardWidget(
+                        metrics: _driver!.metrics!,
+                        userRating: _driver!.rating,
+                      ),
+                      const SizedBox(height: 16),
+                    ],

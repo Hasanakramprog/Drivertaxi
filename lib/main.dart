@@ -14,6 +14,8 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taxi_driver_app/services/face_verification_service.dart';
+import 'package:taxi_driver_app/migrations/fix_time_windows_migration.dart';
+
 
 // FEATURE FLAGS
 const bool ENABLE_FACE_VERIFICATION =
@@ -135,7 +137,8 @@ void _startPeriodicTokenRefresh() {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-
+  // final migration = MetricsMigration();
+  // await migration.fixDriverMetrics('TmKW9F2GcgexJr27TmUqq2qUHKm1');
   // Check for saved active trip
   SharedPreferences prefs = await SharedPreferences.getInstance();
   final activeTripId = prefs.getString('active_trip_id');

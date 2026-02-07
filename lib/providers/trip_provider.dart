@@ -7,10 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taxi_driver_app/main.dart';
 import 'package:taxi_driver_app/screens/trip_tracker_screen.dart';
+import 'package:taxi_driver_app/services/driver_metrics_service.dart';
 
 class TripProvider with ChangeNotifier {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final DriverMetricsService _metricsService = DriverMetricsService();
 
   // Current trip data
   String? _currentTripId;
@@ -200,6 +202,9 @@ class TripProvider with ChangeNotifier {
     if (_auth.currentUser == null) return false;
 
     try {
+      // Update driver metrics - trip accepted
+      await _metricsService.onTripAccepted(_auth.currentUser!.uid);
+
       // Update trip in Firestore
       await _firestore.collection('trips').doc(tripId).update({
         'status': 'driver_accepted',
@@ -271,6 +276,11 @@ class TripProvider with ChangeNotifier {
     if (_currentTripId == null) return false;
 
     try {
+      // Update driver metrics - trip completed
+      if (_auth.currentUser != null) {
+        await _metricsService.onTripCompleted(_auth.currentUser!.uid);
+      }
+
       // Get trip data before completing to calculate earnings
       final tripData = _currentTripData;
 
@@ -325,6 +335,84 @@ class TripProvider with ChangeNotifier {
       return false;
     }
   }
+  /// Cancel trip after accepting (driver cancellation)
+///
+/// This method should be called when a driver cancels a trip after accepting it.
+/// It will update metrics, Firestore, and clean up local state.
+///
+/// Valid cancellation reasons that don't count against metrics:
+/// - 'emergency' - Personal/family emergency
+/// - 'safety_concern' - Unsafe passenger/location
+/// - 'passenger_no_show' - Passenger didn't appear
+/// - 'vehicle_issue' - Mechanical problem
+Future<bool> cancelCurrentTrip({String? reason}) async {
+  if (_currentTripId == null || _auth.currentUser == null) return false;
+
+  try {
+    print('Driver cancelling trip: $_currentTripId');
+
+    // Update driver metrics - trip cancelled
+    await _metricsService.onTripCancelled(
+      _auth.currentUser!.uid,
+      reason: reason,
+    );
+
+    // Update trip status in Firestore
+    await _firestore.collection('trips').doc(_currentTripId).update({
+      'status': 'driver_cancelled',
+      'cancelledBy': _auth.currentUser!.uid,
+      'cancelledAt': FieldValue.serverTimestamp(),
+      'cancellationReason': reason ?? 'No reason provided',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    // Clear current trip
+    String cancelledTripId = _currentTripId!;
+    _currentTripId = null;
+    _currentTripData = null;
+    _tripSubscription?.cancel();
+
+    // Update driver availability
+    await _firestore.collection('drivers').doc(_auth.currentUser!.uid).update({
+      'currentTripId': null,
+      'isAvailable': true,
+      'lastCancellationAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    // Clean up stored data
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.remove('active_trip_id');
+    await prefs.remove('stop_index_${cancelledTripId}');
+    await prefs.remove('all_stops_completed_${cancelledTripId}');
+
+    // Reset stop progress
+    _currentStopIndex = -1;
+    _hasCompletedAllStops = false;
+
+    notifyListeners();
+    print('Trip $cancelledTripId cancelled successfully');
+    return true;
+  } catch (e) {
+    print('Error cancelling trip: $e');
+    return false;
+  }
+}
+
+// Usage example:
+// 
+// Show cancellation dialog with reasons
+// final reason = await showCancellationReasonDialog();
+// 
+// Cancel the trip
+// final success = await tripProvider.cancelCurrentTrip(reason: reason);
+// 
+// if (success) {
+//   // Show success message
+//   ScaffoldMessenger.of(context).showSnackBar(
+//     SnackBar(content: Text('Trip cancelled')),
+//   );
+// }
 
   final List<Function> _tripListeners = [];
 
@@ -408,6 +496,9 @@ class TripProvider with ChangeNotifier {
     try {
       print('Rejecting trip: $tripId');
 
+      // Update driver metrics - trip rejected
+      await _metricsService.onTripRejected(_auth.currentUser!.uid);
+
       // Update trip status in Firestore
       await _firestore.collection('trips').doc(tripId).update({
         'status': 'cancelled',
@@ -463,6 +554,9 @@ class TripProvider with ChangeNotifier {
 
     try {
       print('Rejecting trip: $tripId with reason: $reason');
+
+      // Update driver metrics - trip rejected
+      await _metricsService.onTripRejected(_auth.currentUser!.uid);
 
       // Update trip status in Firestore with detailed rejection info
       await _firestore.collection('trips').doc(tripId).update({
@@ -536,6 +630,11 @@ class TripProvider with ChangeNotifier {
   void processFcmNotification(Map<String, dynamic> messageData) {
     // Check if it's a trip request notification
     if (messageData['notificationType'] == 'tripRequest') {
+      // Update driver metrics - trip requested
+      if (_auth.currentUser != null) {
+        _metricsService.onTripRequested(_auth.currentUser!.uid);
+      }
+
       // Initialize base trip data
       final processedData = {
         'tripId': messageData['tripId'],

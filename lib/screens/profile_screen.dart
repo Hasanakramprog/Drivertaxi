@@ -1,11 +1,13 @@
-// TODO Implement this library.// lib/screens/profile_screen.dart
+// lib/screens/profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:taxi_driver_app/providers/auth_provider.dart';
 import 'package:taxi_driver_app/providers/location_provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:taxi_driver_app/screens/authentication/login_screen.dart'; // Add this import
+import 'package:taxi_driver_app/screens/authentication/login_screen.dart';
+import 'package:taxi_driver_app/models/driver.dart';
+import 'package:taxi_driver_app/widgets/driver_metrics_widgets.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -23,13 +25,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _vehicleYearController = TextEditingController();
   final _licensePlateController = TextEditingController();
   final _vehicleColorController = TextEditingController();
-  
-  
+
   bool _isLoading = false;
   bool _isEditing = false;
   bool _isImageLoading = true; // Add this for image loading state
-  Map<String, dynamic> _driverData = {};
-  
+  Driver? _driver;
+
   double _todayEarnings = 0.0;
   int _todayTrips = 0;
 
@@ -38,7 +39,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.initState();
     _loadDriverData();
   }
-  
+
   @override
   void dispose() {
     _nameController.dispose();
@@ -49,39 +50,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _licensePlateController.dispose();
     super.dispose();
   }
-  
+
   Future<void> _loadDriverData() async {
     setState(() {
       _isLoading = true;
     });
-    
+
     try {
       final driverId = FirebaseAuth.instance.currentUser?.uid;
       if (driverId == null) return;
-      
-      final driverDoc = await FirebaseFirestore.instance
-          .collection('drivers')
-          .doc(driverId)
-          .get();
-      
+
+      final driverDoc =
+          await FirebaseFirestore.instance
+              .collection('drivers')
+              .doc(driverId)
+              .get();
+
       if (driverDoc.exists) {
-        _driverData = driverDoc.data() as Map<String, dynamic>;
-        
+        _driver = Driver.fromFirestore(driverDoc);
+
         // Initialize controllers
-        _nameController.text = _driverData['displayName'] ?? '';
-        _phoneController.text = _driverData['phoneNumber'] ?? '';
-        
-        final vehicleDetails = _driverData['vehicleDetails'] as Map<String, dynamic>? ?? {};
-        _vehicleMakeController.text = vehicleDetails['make'] ?? '';
-        _vehicleModelController.text = vehicleDetails['model'] ?? '';
-        _vehicleYearController.text = vehicleDetails['year']?.toString() ?? '';
-        _licensePlateController.text = vehicleDetails['licensePlate'] ?? '';
-        _vehicleColorController.text = vehicleDetails['color'] ?? '';
+        _nameController.text = _driver!.displayName;
+        _phoneController.text = _driver!.phoneNumber;
+
+        _vehicleMakeController.text = _driver!.vehicleDetails.make;
+        _vehicleModelController.text = _driver!.vehicleDetails.model;
+        _vehicleYearController.text =
+            _driver!.vehicleDetails.year > 0
+                ? _driver!.vehicleDetails.year.toString()
+                : '';
+        _licensePlateController.text = _driver!.vehicleDetails.licensePlate;
+        _vehicleColorController.text = _driver!.vehicleDetails.color;
       }
-      
+
       // Load today's stats
       await _loadTodayStats();
-      
     } catch (e) {
       print('Error loading driver data: $e');
     } finally {
@@ -95,54 +98,57 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final driverId = FirebaseAuth.instance.currentUser?.uid;
       if (driverId == null) return;
-      
+
       // Get today's date range
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day);
       final todayEnd = todayStart.add(const Duration(days: 1));
-      
+
       // Query trips for today
-      final tripsQuery = await FirebaseFirestore.instance
-          .collection('trips')
-          .where('driverId', isEqualTo: driverId)
-          .where('status', isEqualTo: 'completed')
-          .where('completionTime', isGreaterThanOrEqualTo: Timestamp.fromDate(todayStart))
-          .where('completionTime', isLessThan: Timestamp.fromDate(todayEnd))
-          .get();
-      
+      final tripsQuery =
+          await FirebaseFirestore.instance
+              .collection('trips')
+              .where('driverId', isEqualTo: driverId)
+              .where('status', isEqualTo: 'completed')
+              .where(
+                'completionTime',
+                isGreaterThanOrEqualTo: Timestamp.fromDate(todayStart),
+              )
+              .where('completionTime', isLessThan: Timestamp.fromDate(todayEnd))
+              .get();
+
       double totalEarnings = 0.0;
       int tripCount = 0;
-      
+
       for (var doc in tripsQuery.docs) {
         final tripData = doc.data();
         final fare = (tripData['fare'] as num?)?.toDouble() ?? 0.0;
         totalEarnings += fare;
         tripCount++;
       }
-      
+
       if (mounted) {
         setState(() {
           _todayEarnings = totalEarnings;
           _todayTrips = tripCount;
         });
       }
-      
     } catch (e) {
       print('Error loading today stats: $e');
     }
   }
-  
+
   Future<void> _updateProfile() async {
     if (!_formKey.currentState!.validate()) return;
-    
+
     setState(() {
       _isLoading = true;
     });
-    
+
     try {
       final driverId = FirebaseAuth.instance.currentUser?.uid;
       if (driverId == null) return;
-      
+
       // Update vehicle details
       final vehicleDetails = {
         'make': _vehicleMakeController.text.trim(),
@@ -151,59 +157,63 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'color': _vehicleColorController.text.trim(),
         'licensePlate': _licensePlateController.text.trim(),
       };
-      
+
       // Update driver document
       await FirebaseFirestore.instance
           .collection('drivers')
           .doc(driverId)
           .update({
-        'displayName': _nameController.text.trim(),
-        'phoneNumber': _phoneController.text.trim(),
-        'vehicleDetails': vehicleDetails,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-      
+            'displayName': _nameController.text.trim(),
+            'phoneNumber': _phoneController.text.trim(),
+            'vehicleDetails': vehicleDetails,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+
       // Update user display name
       await FirebaseAuth.instance.currentUser?.updateDisplayName(
         _nameController.text.trim(),
       );
-      
+
       setState(() {
         _isEditing = false;
       });
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Profile updated successfully')),
       );
     } catch (e) {
       print('Error updating profile: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error updating profile: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error updating profile: $e')));
     } finally {
       setState(() {
         _isLoading = false;
       });
     }
   }
-  
+
   Widget _buildProfileImage() {
-    final profileImageUrl = _driverData['baseFaceImageUrl'] as String?;
-    
+    final profileImageUrl = _driver?.baseFaceImageUrl;
+
     return Stack(
       children: [
         CircleAvatar(
           radius: 50,
           backgroundColor: Colors.grey[300],
-          backgroundImage: profileImageUrl != null && profileImageUrl.isNotEmpty
-              ? NetworkImage(profileImageUrl)
-              : null,
-          child: profileImageUrl == null || profileImageUrl.isEmpty
-              ? const Icon(Icons.person, size: 50)
-              : null,
+          backgroundImage:
+              profileImageUrl != null && profileImageUrl.isNotEmpty
+                  ? NetworkImage(profileImageUrl)
+                  : null,
+          child:
+              profileImageUrl == null || profileImageUrl.isEmpty
+                  ? const Icon(Icons.person, size: 50)
+                  : null,
         ),
         // Loading overlay
-        if (_isImageLoading && profileImageUrl != null && profileImageUrl.isNotEmpty)
+        if (_isImageLoading &&
+            profileImageUrl != null &&
+            profileImageUrl.isNotEmpty)
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
@@ -223,8 +233,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildProfileImageWithListener() {
-    final profileImageUrl = _driverData['baseFaceImageUrl'] as String?;
-    
+    final profileImageUrl = _driver?.baseFaceImageUrl;
+
     if (profileImageUrl == null || profileImageUrl.isEmpty) {
       return CircleAvatar(
         radius: 50,
@@ -232,7 +242,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: const Icon(Icons.person, size: 50),
       );
     }
-    
+
     return Stack(
       children: [
         CircleAvatar(
@@ -270,8 +280,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // Alternative approach using Image.network with proper loading handling
   Widget _buildProfileImageAdvanced() {
-    final profileImageUrl = _driverData['baseFaceImageUrl'] as String?;
-    
+    final profileImageUrl = _driver?.baseFaceImageUrl;
+
     if (profileImageUrl == null || profileImageUrl.isEmpty) {
       return CircleAvatar(
         radius: 50,
@@ -279,7 +289,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: const Icon(Icons.person, size: 50),
       );
     }
-    
+
     return SizedBox(
       width: 100,
       height: 100,
@@ -292,16 +302,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
               // Image loaded successfully
               return child;
             }
-            
+
             // Show loading indicator while image is loading
             return Container(
               color: Colors.grey[300],
               child: Center(
                 child: CircularProgressIndicator(
-                  value: loadingProgress.expectedTotalBytes != null
-                      ? loadingProgress.cumulativeBytesLoaded / 
-                        loadingProgress.expectedTotalBytes!
-                      : null,
+                  value:
+                      loadingProgress.expectedTotalBytes != null
+                          ? loadingProgress.cumulativeBytesLoaded /
+                              loadingProgress.expectedTotalBytes!
+                          : null,
                   strokeWidth: 2,
                 ),
               ),
@@ -311,11 +322,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             print('Error loading profile image: $error');
             return Container(
               color: Colors.grey[300],
-              child: const Icon(
-                Icons.person,
-                size: 50,
-                color: Colors.grey,
-              ),
+              child: const Icon(Icons.person, size: 50, color: Colors.grey),
             );
           },
         ),
@@ -326,7 +333,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<DriverAuthProvider>(context);
-    
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Driver Profile'),
@@ -342,197 +349,232 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Profile header
-                  Center(
-                    child: Column(
-                      children: [
-                        _buildProfileImageAdvanced(),
-                        const SizedBox(height: 8),
-                        Text(
-                          _driverData['displayName'] ?? 'Driver',
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          authProvider.user?.email ?? '',
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.star, color: Colors.amber[700], size: 20),
-                            Text(
-                              ' ${_driverData['rating']?.toStringAsFixed(1) ?? '5.0'} • ',
-                              style: const TextStyle(fontSize: 16),
+      body:
+          _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : SingleChildScrollView(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Profile header
+                    Center(
+                      child: Column(
+                        children: [
+                          _buildProfileImageAdvanced(),
+                          const SizedBox(height: 8),
+                          Text(
+                            _driver?.displayName ?? 'Driver',
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
                             ),
-                            Text(
-                              '${_driverData['ratingCount'] ?? 0} ratings',
-                              style: TextStyle(
-                                color: Colors.grey[600],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _driver?.email ?? authProvider.user?.email ?? '',
+                            style: TextStyle(color: Colors.grey[600]),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.star,
+                                color: Colors.amber[700],
+                                size: 20,
                               ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 24),
-                  const Divider(),
-                  
-                  // Status indicator
-                  ListTile(
-                    leading: Icon(
-                      _driverData['isApproved'] == true
-                          ? Icons.check_circle
-                          : Icons.pending,
-                      color: _driverData['isApproved'] == true
-                          ? Colors.green
-                          : Colors.orange,
-                    ),
-                    title: const Text('Account Status'),
-                    subtitle: Text(
-                      _driverData['isApproved'] == true
-                          ? 'Approved'
-                          : 'Pending Approval',
-                    ),
-                  ),
-                  
-                  const Divider(),
-                  
-                  // Today's Stats Section
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8.0),
-                    child: Column(
-                      children: [
-                        Text(
-                          'Today\'s Performance',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey[700],
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            _buildStatItem(
-                              'Today\'s Trips',
-                              '$_todayTrips',
-                              Icons.directions_car,
-                              Colors.blue,
-                            ),
-                            _buildStatItem(
-                              'Today\'s Earnings',
-                              '\$${_todayEarnings.toStringAsFixed(2)}',
-                              Icons.attach_money,
-                              Colors.green,
-                            ),
-                            _buildStatItem(
-                              'Member Since',
-                              _formatDate(_driverData['createdAt']),
-                              Icons.calendar_today,
-                              Colors.orange,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  
-                  const Divider(),
-                  
-                  // Profile form
-                  _isEditing
-                      ? _buildEditForm()
-                      : _buildProfileInfo(),
-                  
-                  const SizedBox(height: 16),
-                  
-                  // Logout button
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () async {
-                        // Show confirmation dialog
-                        final shouldLogout = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Logout'),
-                            content: const Text('Are you sure you want to logout?'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(context).pop(false),
-                                child: const Text('Cancel'),
+                              Text(
+                                ' ${_driver?.formattedRating ?? '5.0'} • ',
+                                style: const TextStyle(fontSize: 16),
                               ),
-                              TextButton(
-                                onPressed: () => Navigator.of(context).pop(true),
-                                child: const Text('Logout'),
+                              Text(
+                                '${_driver?.ratingCount ?? 0} ratings',
+                                style: TextStyle(color: Colors.grey[600]),
                               ),
                             ],
                           ),
-                        ) ?? false;
-                        
-                        if (shouldLogout) {
-                          try {
-                            // Get location provider to set driver offline
-                            final locationProvider = Provider.of<LocationProvider>(context, listen: false);
-                            
-                            // Set driver offline first if currently online
-                            if (locationProvider.isOnline) {
-                              print('Setting driver offline before logout...');
-                              await locationProvider.goOffline();
-                            }
-                            
-                            // Then logout
-                            await authProvider.logout();
-                            
-                            // Navigate to login screen and remove all previous routes
-                            if (mounted) {
-                              Navigator.of(context).pushAndRemoveUntil(
-                                MaterialPageRoute(
-                                  builder: (context) => const LoginScreen(),
-                                ),
-                                (route) => false, // This removes all previous routes
-                              );
-                            }
-                          } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Error logging out: $e')),
-                              );
+                          // Add Tier Badge
+                          if (_driver?.metrics != null) ...[
+                            const SizedBox(height: 12),
+                            TierBadgeWidget(driver: _driver!),
+                          ],
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+                    // Driver Metrics Dashboard
+                    if (_driver?.metrics != null) ...[
+                      MetricsDashboardWidget(driver: _driver!),
+                      const SizedBox(height: 16),
+                    ],
+                    const Divider(),
+
+                    // Status indicator
+                    ListTile(
+                      leading: Icon(
+                        _driver?.isApproved == true
+                            ? Icons.check_circle
+                            : Icons.pending,
+                        color:
+                            _driver?.isApproved == true
+                                ? Colors.green
+                                : Colors.orange,
+                      ),
+                      title: const Text('Account Status'),
+                      subtitle: Text(
+                        _driver?.isApproved == true
+                            ? 'Approved'
+                            : 'Pending Approval',
+                      ),
+                    ),
+
+                    const Divider(),
+
+                    // Today's Stats Section
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8.0),
+                      child: Column(
+                        children: [
+                          Text(
+                            'Today\'s Performance',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              _buildStatItem(
+                                'Today\'s Trips',
+                                '$_todayTrips',
+                                Icons.directions_car,
+                                Colors.blue,
+                              ),
+                              _buildStatItem(
+                                'Today\'s Earnings',
+                                '\$${_todayEarnings.toStringAsFixed(2)}',
+                                Icons.attach_money,
+                                Colors.green,
+                              ),
+                              _buildStatItem(
+                                'Member Since',
+                                _driver?.memberSince ?? 'N/A',
+                                Icons.calendar_today,
+                                Colors.orange,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const Divider(),
+
+                    // Profile form
+                    _isEditing ? _buildEditForm() : _buildProfileInfo(),
+
+                    const SizedBox(height: 16),
+
+                    // Logout button
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          // Show confirmation dialog
+                          final shouldLogout =
+                              await showDialog<bool>(
+                                context: context,
+                                builder:
+                                    (context) => AlertDialog(
+                                      title: const Text('Logout'),
+                                      content: const Text(
+                                        'Are you sure you want to logout?',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed:
+                                              () => Navigator.of(
+                                                context,
+                                              ).pop(false),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        TextButton(
+                                          onPressed:
+                                              () => Navigator.of(
+                                                context,
+                                              ).pop(true),
+                                          child: const Text('Logout'),
+                                        ),
+                                      ],
+                                    ),
+                              ) ??
+                              false;
+
+                          if (shouldLogout) {
+                            try {
+                              // Get location provider to set driver offline
+                              final locationProvider =
+                                  Provider.of<LocationProvider>(
+                                    context,
+                                    listen: false,
+                                  );
+
+                              // Set driver offline first if currently online
+                              if (locationProvider.isOnline) {
+                                print(
+                                  'Setting driver offline before logout...',
+                                );
+                                await locationProvider.goOffline();
+                              }
+
+                              // Then logout
+                              await authProvider.logout();
+
+                              // Navigate to login screen and remove all previous routes
+                              if (mounted) {
+                                Navigator.of(context).pushAndRemoveUntil(
+                                  MaterialPageRoute(
+                                    builder: (context) => const LoginScreen(),
+                                  ),
+                                  (route) =>
+                                      false, // This removes all previous routes
+                                );
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Error logging out: $e'),
+                                  ),
+                                );
+                              }
                             }
                           }
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        foregroundColor: Colors.white,
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Text('Logout'),
                       ),
-                      child: const Text('Logout'),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
     );
   }
-  
-  Widget _buildStatItem(String label, String value, IconData icon, Color color) {
+
+  Widget _buildStatItem(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(12),
@@ -556,10 +598,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 4),
             Text(
               label,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
               textAlign: TextAlign.center,
             ),
           ],
@@ -567,53 +606,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
   }
-  
-  String _formatDate(dynamic timestamp) {
-    if (timestamp == null) return 'N/A';
-    
-    if (timestamp is Timestamp) {
-      final date = timestamp.toDate();
-      return '${date.month}/${date.year}';
-    }
-    
-    return 'N/A';
-  }
-  
+
   Widget _buildProfileInfo() {
-    final vehicleDetails = _driverData['vehicleDetails'] as Map<String, dynamic>? ?? {};
-    
+    if (_driver == null) {
+      return const Center(child: Text('No driver data available'));
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
           'Personal Information',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
-        _buildInfoItem('Full Name', _driverData['displayName'] ?? 'Not provided'),
-        _buildInfoItem('Phone Number', _driverData['phoneNumber'] ?? 'Not provided'),
-        
+        _buildInfoItem('Full Name', _driver!.displayName),
+        _buildInfoItem('Phone Number', _driver!.phoneNumber),
+
         const SizedBox(height: 16),
         const Text(
           'Vehicle Information',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
-        _buildInfoItem('Make', vehicleDetails['make'] ?? 'Not provided'),
-        _buildInfoItem('Model', vehicleDetails['model'] ?? 'Not provided'),
-        _buildInfoItem('Year', vehicleDetails['year']?.toString() ?? 'Not provided'),
-        _buildInfoItem('Color', vehicleDetails['color'] ?? 'Not provided'),
-        _buildInfoItem('License Plate', vehicleDetails['licensePlate'] ?? 'Not provided'),
+        _buildInfoItem('Make', _driver!.vehicleDetails.make),
+        _buildInfoItem('Model', _driver!.vehicleDetails.model),
+        _buildInfoItem(
+          'Year',
+          _driver!.vehicleDetails.year > 0
+              ? _driver!.vehicleDetails.year.toString()
+              : 'Not provided',
+        ),
+        _buildInfoItem('Color', _driver!.vehicleDetails.color),
+        _buildInfoItem('License Plate', _driver!.vehicleDetails.licensePlate),
       ],
     );
   }
-  
+
   Widget _buildInfoItem(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -624,19 +653,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
             width: 120,
             child: Text(
               '$label:',
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
-          Expanded(
-            child: Text(value),
-          ),
+          Expanded(child: Text(value)),
         ],
       ),
     );
   }
-  
+
   Widget _buildEditForm() {
     return Form(
       key: _formKey,
@@ -645,17 +670,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         children: [
           const Text(
             'Personal Information',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           TextFormField(
             controller: _nameController,
-            decoration: const InputDecoration(
-              labelText: 'Full Name',
-            ),
+            decoration: const InputDecoration(labelText: 'Full Name'),
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
                 return 'Please enter your name';
@@ -666,9 +686,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const SizedBox(height: 8),
           TextFormField(
             controller: _phoneController,
-            decoration: const InputDecoration(
-              labelText: 'Phone Number',
-            ),
+            decoration: const InputDecoration(labelText: 'Phone Number'),
             keyboardType: TextInputType.phone,
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
@@ -677,21 +695,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
               return null;
             },
           ),
-          
+
           const SizedBox(height: 16),
           const Text(
             'Vehicle Information',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           TextFormField(
             controller: _vehicleMakeController,
-            decoration: const InputDecoration(
-              labelText: 'Make',
-            ),
+            decoration: const InputDecoration(labelText: 'Make'),
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
                 return 'Please enter vehicle make';
@@ -702,9 +715,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const SizedBox(height: 8),
           TextFormField(
             controller: _vehicleModelController,
-            decoration: const InputDecoration(
-              labelText: 'Model',
-            ),
+            decoration: const InputDecoration(labelText: 'Model'),
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
                 return 'Please enter vehicle model';
@@ -715,9 +726,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const SizedBox(height: 8),
           TextFormField(
             controller: _vehicleYearController,
-            decoration: const InputDecoration(
-              labelText: 'Year',
-            ),
+            decoration: const InputDecoration(labelText: 'Year'),
             keyboardType: TextInputType.number,
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
@@ -732,9 +741,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const SizedBox(height: 8),
           TextFormField(
             controller: _vehicleColorController,
-            decoration: const InputDecoration(
-              labelText: 'Color',
-            ),
+            decoration: const InputDecoration(labelText: 'Color'),
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
                 return 'Please enter vehicle color';
@@ -745,9 +752,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const SizedBox(height: 8),
           TextFormField(
             controller: _licensePlateController,
-            decoration: const InputDecoration(
-              labelText: 'License Plate',
-            ),
+            decoration: const InputDecoration(labelText: 'License Plate'),
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
                 return 'Please enter license plate';
@@ -755,7 +760,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               return null;
             },
           ),
-          
+
           const SizedBox(height: 24),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
@@ -773,16 +778,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(width: 8),
               ElevatedButton(
                 onPressed: _updateProfile,
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                        ),
-                      )
-                    : const Text('Save Changes'),
+                child:
+                    _isLoading
+                        ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
+                          ),
+                        )
+                        : const Text('Save Changes'),
               ),
             ],
           ),
